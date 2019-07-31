@@ -1,7 +1,4 @@
-use std::borrow::Borrow;
-use std::iter::Iterator;
-use std::collections::BinaryHeap;
-use std::cmp::{Ordering, PartialEq, PartialOrd, Ord};
+pub mod reader;
 
 #[derive(Debug)]
 pub enum BuildError<IE, TE> {
@@ -9,7 +6,7 @@ pub enum BuildError<IE, TE> {
     NTree(TE),
 }
 
-pub trait NTreeWriter: Sized {
+pub trait NTreeWriter {
     type Item;
     type Error;
     type Position;
@@ -21,19 +18,28 @@ pub trait NTreeWriter: Sized {
     fn write_item(&mut self, block: &mut Self::Block, item: Self::Item, child_block_pos: Self::Position) -> Result<(), Self::Error>;
     fn flush_block(&mut self, block: Self::Block) -> Result<Self::Position, Self::Error>;
     fn finish(self, root_block_pos: Self::Position) -> Result<Self::Result, Self::Error>;
+}
 
-    fn build<I, E>(mut self, mut src: I, src_len: usize, min_tree_height: usize, max_block_size: usize) ->
-        Result<Self::Result, BuildError<E, Self::Error>> where I: Iterator<Item = Result<Self::Item, E>>
-    {
-        let mut index_block_size = max_block_size + 1;
-        let mut tree_height = min_tree_height;
-        while src_len > 0 && index_block_size > max_block_size {
-            index_block_size = (src_len as f64).powf(1.0 / tree_height as f64) as usize;
-            tree_height += 1;
-        }
-        let root_block_pos = build_block(&mut src, 0, src_len, index_block_size, &mut self)?;
-        self.finish(root_block_pos).map_err(|e| BuildError::NTree(e))
+pub fn build<I, W, E>(
+    mut src: I,
+    src_len: usize,
+    mut dst: W,
+    min_tree_height: usize,
+    max_block_size: usize,
+) ->
+    Result<W::Result, BuildError<E, W::Error>>
+where
+    I: Iterator<Item = Result<W::Item, E>>,
+    W: NTreeWriter
+{
+    let mut index_block_size = max_block_size + 1;
+    let mut tree_height = min_tree_height;
+    while src_len > 0 && index_block_size > max_block_size {
+        index_block_size = (src_len as f64).powf(1.0 / tree_height as f64) as usize;
+        tree_height += 1;
     }
+    let root_block_pos = build_block(&mut src, 0, src_len, index_block_size, &mut dst)?;
+    dst.finish(root_block_pos).map_err(|e| BuildError::NTree(e))
 }
 
 fn build_block<T, E, P, I, IE, W>(src: &mut I, block_start: usize, block_end: usize, block_size: usize, dst: &mut W) -> Result<P, BuildError<IE, E>>
@@ -67,89 +73,6 @@ fn build_block<T, E, P, I, IE, W>(src: &mut I, block_start: usize, block_end: us
     }
 
     dst.flush_block(block).map_err(|e| BuildError::NTree(e))
-}
-
-struct Pos<C, Q> {
-    cursor: C,
-    key: Q,
-}
-
-impl<C, Q> Eq for Pos<C, Q> where C: PartialEq { }
-
-impl<C, Q> PartialEq for Pos<C, Q> where C: PartialEq {
-    fn eq(&self, other: &Pos<C, Q>) -> bool {
-        self.cursor.eq(&other.cursor)
-    }
-}
-
-impl<C, Q> PartialOrd for Pos<C, Q> where C: PartialOrd {
-    fn partial_cmp(&self, other: &Pos<C, Q>) -> Option<Ordering> {
-        self.cursor.partial_cmp(&other.cursor)
-    }
-}
-
-impl<C, Q> Ord for Pos<C, Q> where C: PartialOrd {
-    fn cmp(&self, other: &Pos<C, Q>) -> Ordering {
-        self.partial_cmp(other).unwrap_or(Ordering::Equal)
-    }
-}
-
-pub trait NTreeReader {
-    type Item;
-    type Error;
-    type Cursor: PartialOrd;
-
-    fn root(&self) -> Self::Cursor;
-    fn load<'a>(&'a mut self, cursor: &mut Self::Cursor) -> Result<Option<&'a Self::Item>, Self::Error>;
-    fn advance(&self, cursor: Self::Cursor) -> Self::Cursor;
-    fn jump(&self, cursor: Self::Cursor) -> Self::Cursor;
-
-    fn lookup_iter<'r, 'q: 'r, I, Q: ?Sized + 'q>(&'r mut self, keys_iter: I) -> NTreeIter<Self, Q> where I: Iterator<Item = &'q Q> {
-        NTreeIter {
-            queue: keys_iter.map(|key| Pos { cursor: self.root(), key: key, }).collect(),
-            tree: self,
-        }
-    }
-}
-
-pub struct NTreeIter<'t, 'q: 't, T: ?Sized + 't, Q: ?Sized + 'q> where T: NTreeReader {
-    tree: &'t mut T,
-    queue: BinaryHeap<Pos<T::Cursor, &'q Q>>,
-}
-
-impl<'t, 'q: 't, T: ?Sized + 't, Q: ?Sized + 'q> NTreeIter<'t, 'q, T, Q> where T: NTreeReader {
-    pub fn next<'i>(&'i mut self) -> Result<Option<(&'q Q, &'i T::Item)>, T::Error>
-        where T::Item: Borrow<Q>, Q: PartialOrd
-    {
-        loop {
-            if let Some(mut pos) = self.queue.pop() {
-                enum Then { Result, Jump, Advance, Skip, };
-                let action = match self.tree.load(&mut pos.cursor)? {
-                    Some(block_item) if pos.key == block_item.borrow() =>
-                        Then::Result,
-                    Some(block_item) if pos.key < block_item.borrow() =>
-                        Then::Jump,
-                    Some(..) =>
-                        Then::Advance,
-                    None =>
-                        Then::Skip,
-                };
-
-                match action {
-                    Then::Result =>
-                        return Ok(self.tree.load(&mut pos.cursor)?.map(|block_item| (pos.key, block_item))),
-                    Then::Jump =>
-                        self.queue.push(Pos { cursor: self.tree.jump(pos.cursor), key: pos.key, }),
-                    Then::Advance =>
-                        self.queue.push(Pos { cursor: self.tree.advance(pos.cursor), key: pos.key, }),
-                    Then::Skip =>
-                        (),
-                }
-            } else {
-                return Ok(None)
-            }
-        }
-    }
 }
 
 #[cfg(test)]
