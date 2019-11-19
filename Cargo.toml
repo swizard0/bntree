@@ -1,8 +1,8 @@
 [package]
 name = "bntree"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["Alexey Voznyuk <me@swizard.info>"]
-description = "Immutable B*-tree like data structure with layout optimized for sequential access"
+description = "Immutable B*-tree like data structure with layout heavily optimized for sequential access"
 repository = "https://github.com/swizard0/bntree"
 edition = "2018"
 

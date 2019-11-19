@@ -97,3 +97,74 @@ impl<C, Q> Ord for Pos<C, Q> where C: PartialOrd {
         self.partial_cmp(other).unwrap_or(Ordering::Equal)
     }
 }
+
+pub struct InOrderTraverse<R> {
+    tree_reader: R,
+}
+
+impl<R> InOrderTraverse<R> {
+    pub fn new(tree_reader: R) -> InOrderTraverse<R> {
+        InOrderTraverse {
+            tree_reader,
+        }
+    }
+
+    pub fn iter(self) -> InOrderIterator<R, R::Cursor, R::Error> where R: Reader {
+        let script = vec![
+            TraverseAction::Inspect(
+                self.tree_reader.root(),
+            ),
+        ];
+
+        InOrderIterator {
+            tree_reader: self.tree_reader,
+            script,
+        }
+    }
+}
+
+enum TraverseAction<C, E> {
+    Inspect(Result<Option<C>, E>),
+    Return(C),
+}
+
+
+pub struct InOrderIterator<R, C, E> {
+    tree_reader: R,
+    script: Vec<TraverseAction<C, E>>,
+}
+
+impl<R> Iterator for InOrderIterator<R, R::Cursor, R::Error>
+where R: Reader,
+      R::Item: Clone,
+      R::Cursor: Clone,
+{
+    type Item = Result<R::Item, R::Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(command) = self.script.pop() {
+            match command {
+                TraverseAction::Inspect(Err(error)) =>
+                    return Some(Err(error)),
+                TraverseAction::Inspect(Ok(None)) =>
+                    (),
+                TraverseAction::Inspect(Ok(Some(cursor))) => {
+                    self.script.push(TraverseAction::Return(
+                        cursor.clone(),
+                    ));
+                    self.script.push(TraverseAction::Inspect(
+                        self.tree_reader.jump(cursor),
+                    ));
+                },
+                TraverseAction::Return(cursor) => {
+                    let item = self.tree_reader.access(&cursor).clone();
+                    self.script.push(TraverseAction::Inspect(
+                        self.tree_reader.advance(cursor),
+                    ));
+                    return Some(Ok(item));
+                },
+            };
+        }
+        None
+    }
+}
