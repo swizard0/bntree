@@ -1,10 +1,10 @@
 #[derive(Debug)]
-pub enum BuildError<IE, TE> {
+pub enum BuildError<IE, WE> {
     Iter(IE),
-    NTree(TE),
+    Writer(WE),
 }
 
-pub trait NTreeWriter {
+pub trait Writer {
     type Item;
     type Error;
     type Position;
@@ -28,7 +28,7 @@ pub fn build<I, W, E>(
     Result<W::Result, BuildError<E, W::Error>>
 where
     I: Iterator<Item = Result<W::Item, E>>,
-    W: NTreeWriter
+    W: Writer,
 {
     let mut index_block_size = max_block_size + 1;
     let mut tree_height = min_tree_height;
@@ -37,11 +37,19 @@ where
         tree_height += 1;
     }
     let root_block_pos = build_block(&mut src, 0, src_len, index_block_size, &mut dst)?;
-    dst.finish(root_block_pos).map_err(|e| BuildError::NTree(e))
+    dst.finish(root_block_pos).map_err(|e| BuildError::Writer(e))
 }
 
-fn build_block<T, E, P, I, IE, W>(src: &mut I, block_start: usize, block_end: usize, block_size: usize, dst: &mut W) -> Result<P, BuildError<IE, E>>
-    where I: Iterator<Item = Result<T, IE>>, W: NTreeWriter<Item = T, Error = E, Position = P>
+fn build_block<T, E, P, I, IE, W>(
+    src: &mut I,
+    block_start: usize,
+    block_end: usize,
+    block_size: usize,
+    dst: &mut W,
+)
+    -> Result<P, BuildError<IE, E>>
+where I: Iterator<Item = Result<T, IE>>,
+      W: Writer<Item = T, Error = E, Position = P>,
 {
     let interval = block_end - block_start;
     let (index_start, index_inc) = if interval > block_size {
@@ -50,7 +58,8 @@ fn build_block<T, E, P, I, IE, W>(src: &mut I, block_start: usize, block_end: us
         (0, 1)
     };
 
-    let mut block = dst.make_block().map_err(|e| BuildError::NTree(e))?;
+    let mut block = dst.make_block()
+        .map_err(|e| BuildError::Writer(e))?;
     let mut node_block_start = block_start;
     let mut node_block_end = block_start + index_start;
     while node_block_end < block_end {
@@ -61,7 +70,8 @@ fn build_block<T, E, P, I, IE, W>(src: &mut I, block_start: usize, block_end: us
         };
 
         if let Some(maybe_item) = src.next() {
-            dst.write_item(&mut block, maybe_item.map_err(|e| BuildError::Iter(e))?, child_block_pos).map_err(|e| BuildError::NTree(e))?;
+            dst.write_item(&mut block, maybe_item.map_err(|e| BuildError::Iter(e))?, child_block_pos)
+                .map_err(|e| BuildError::Writer(e))?;
         } else {
             break
         }
@@ -70,5 +80,5 @@ fn build_block<T, E, P, I, IE, W>(src: &mut I, block_start: usize, block_end: us
         node_block_end += index_inc;
     }
 
-    dst.flush_block(block).map_err(|e| BuildError::NTree(e))
+    dst.flush_block(block).map_err(|e| BuildError::Writer(e))
 }
