@@ -168,27 +168,3 @@ where R: Reader,
         None
     }
 }
-
-pub struct BlocksBfsTraverse<R> {
-    tree_reader: R,
-}
-
-impl<R> BlocksBfsTraverse<R> {
-    pub fn new(tree_reader: R) -> BlocksBfsTraverse<R> {
-        BlocksBfsTraverse {
-            tree_reader,
-        }
-    }
-
-    pub fn iter(self) -> BlocksBfsIterator<R, R::Cursor, R::Error> where R: Reader {
-        BlocksBfsIterator {
-            tree_reader: self.tree_reader,
-            _marker: std::marker::PhantomData,
-        }
-    }
-}
-
-pub struct BlocksBfsIterator<R, C, E> {
-    tree_reader: R,
-    _marker: std::marker::PhantomData<(C, E)>,
-}
