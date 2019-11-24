@@ -75,7 +75,7 @@ pub mod plan {
     }
 
     pub struct Plan<'s> {
-        sketch: &'s sketch::Tree,
+        pub sketch: &'s sketch::Tree,
         cursors: Vec<LevelCursor<'s>>,
         level_curr: usize,
         level_base: usize,
@@ -161,11 +161,261 @@ pub mod plan {
     }
 }
 
+pub mod fold {
+    use super::{sketch, plan};
+
+    pub fn fold_levels<'s, B, S>(sketch: &'s sketch::Tree) -> FoldLevels<'s, B, S> {
+        FoldLevels {
+            plan: plan::build(sketch),
+            levels: sketch
+                .levels()
+                .iter()
+                .map(|level| Level { level, state: Some(LevelState::Init), })
+                .collect(),
+        }
+    }
+
+    pub struct FoldLevels<'s, B, S> {
+        plan: plan::Plan<'s>,
+        levels: Vec<Level<'s, B, S>>,
+    }
+
+    struct Level<'s, B, S> {
+        level: &'s sketch::Level,
+        state: Option<LevelState<B, S>>,
+    }
+
+    enum LevelState<B, S> {
+        Init,
+        Active {
+            level_seed: S,
+            block: B,
+            block_index: usize,
+        },
+        Flushed {
+            level_seed: S,
+        },
+    }
+
+    impl<'s, B, S> FoldLevels<'s, B, S> {
+        pub fn next(mut self) -> Instruction<'s, B, S> {
+            match self.plan.next() {
+                None =>
+                    Instruction::Done(Done { fold_levels: self, }),
+                Some(plan::Instruction { level, block_index, op: plan::Op::BlockStart, }) => {
+                    assert!(level.index < self.levels.len());
+                    match self.levels[level.index].state.take() {
+                        None =>
+                            panic!("level state left in invalid state for BlockStart"),
+                        Some(LevelState::Init) => {
+                            assert_eq!(block_index, 0);
+                            Instruction::VisitLevel(VisitLevel {
+                                level,
+                                next: VisitLevelNext {
+                                    fold_levels: self,
+                                    level,
+                                },
+                            })
+                        },
+                        Some(LevelState::Active { block_index: prev_block_index, .. }) =>
+                            panic!("new block {} while previous block {} is not finished on level {} for BlockStart",
+                                   block_index, prev_block_index, level.index),
+                        Some(LevelState::Flushed { level_seed, }) => {
+                            assert!(block_index > 0);
+                            Instruction::VisitBlockStart(VisitBlockStart {
+                                level,
+                                level_seed,
+                                block_index,
+                                next: VisitBlockStartNext {
+                                    fold_levels: self,
+                                    level,
+                                    block_index,
+                                },
+                            })
+                        },
+                    }
+                },
+                Some(plan::Instruction { level, block_index, op: plan::Op::WriteItem { block_item_index, }, .. }) => {
+                    assert!(level.index < self.levels.len());
+                    match self.levels[level.index].state.take() {
+                        None =>
+                            panic!("level state left in invalid state for WriteItem"),
+                        Some(LevelState::Init) =>
+                            panic!("level and block are not initialized for WriteItem"),
+                        Some(LevelState::Active { level_seed, block, block_index: active_block_index, }) => {
+                            assert!(active_block_index == block_index);
+                            Instruction::VisitItem(VisitItem {
+                                level,
+                                level_seed,
+                                block,
+                                block_index,
+                                block_item_index,
+                                next: VisitItemNext {
+                                    fold_levels: self,
+                                    level,
+                                    block_index,
+                                },
+                            })
+                        },
+                        Some(LevelState::Flushed { .. }) =>
+                            panic!("block is already flushed for WriteItem"),
+                    }
+                },
+                Some(plan::Instruction { level, block_index, op: plan::Op::BlockFinish, }) => {
+                    assert!(level.index < self.levels.len());
+                    match self.levels[level.index].state.take() {
+                        None =>
+                            panic!("level state left in invalid state for BlockFinish"),
+                        Some(LevelState::Init) =>
+                            panic!("level and block are not initialized for BlockFinish"),
+                        Some(LevelState::Active { level_seed, block, block_index: active_block_index, }) => {
+                            assert!(active_block_index == block_index);
+                            Instruction::VisitBlockFinish(VisitBlockFinish {
+                                level,
+                                level_seed,
+                                block,
+                                block_index,
+                                next: VisitBlockFinishNext {
+                                    fold_levels: self,
+                                    level,
+                                },
+                            })
+                        },
+                        Some(LevelState::Flushed { .. }) =>
+                            panic!("block is already flushed for BlockFinish"),
+                    }
+                },
+            }
+        }
+    }
+
+    pub enum Instruction<'s, B, S> {
+        Done(Done<'s, B, S>),
+        VisitLevel(VisitLevel<'s, B, S>),
+        VisitBlockStart(VisitBlockStart<'s, B, S>),
+        VisitItem(VisitItem<'s, B, S>),
+        VisitBlockFinish(VisitBlockFinish<'s, B, S>),
+    }
+
+    pub struct VisitLevel<'s, B, S> {
+        pub level: &'s sketch::Level,
+        pub next: VisitLevelNext<'s, B, S>,
+    }
+
+    pub struct VisitLevelNext<'s, B, S> {
+        fold_levels: FoldLevels<'s, B, S>,
+        level: &'s sketch::Level,
+    }
+
+    impl<'s, B, S> VisitLevelNext<'s, B, S> {
+        pub fn level_ready(self, level_seed: S) -> VisitBlockStart<'s, B, S> {
+            VisitBlockStart {
+                level: self.level,
+                level_seed,
+                block_index: 0,
+                next: VisitBlockStartNext {
+                    fold_levels: self.fold_levels,
+                    level: self.level,
+                    block_index: 0,
+                },
+            }
+        }
+    }
+
+    pub struct VisitBlockStart<'s, B, S> {
+        pub level: &'s sketch::Level,
+        pub level_seed: S,
+        pub block_index: usize,
+        pub next: VisitBlockStartNext<'s, B, S>,
+    }
+
+    pub struct VisitBlockStartNext<'s, B, S> {
+        fold_levels: FoldLevels<'s, B, S>,
+        level: &'s sketch::Level,
+        block_index: usize,
+    }
+
+    impl<'s, B, S> VisitBlockStartNext<'s, B, S> {
+        pub fn block_ready(mut self, block: B, level_seed: S) -> FoldLevels<'s, B, S> {
+            let state = &mut self.fold_levels.levels[self.level.index].state;
+            assert!(state.is_none());
+            *state = Some(LevelState::Active { level_seed, block, block_index: self.block_index, });
+            self.fold_levels
+        }
+    }
+
+    pub struct VisitItem<'s, B, S> {
+        pub level: &'s sketch::Level,
+        pub level_seed: S,
+        pub block: B,
+        pub block_index: usize,
+        pub block_item_index: usize,
+        pub next: VisitItemNext<'s, B, S>,
+    }
+
+    pub struct VisitItemNext<'s, B, S> {
+        fold_levels: FoldLevels<'s, B, S>,
+        level: &'s sketch::Level,
+        block_index: usize,
+    }
+
+    impl<'s, B, S> VisitItemNext<'s, B, S> {
+        pub fn item_ready(mut self, block: B, level_seed: S) -> FoldLevels<'s, B, S> {
+            let state = &mut self.fold_levels.levels[self.level.index].state;
+            assert!(state.is_none());
+            *state = Some(LevelState::Active { level_seed, block, block_index: self.block_index, });
+            self.fold_levels
+        }
+    }
+
+    pub struct VisitBlockFinish<'s, B, S> {
+        pub level: &'s sketch::Level,
+        pub level_seed: S,
+        pub block: B,
+        pub block_index: usize,
+        pub next: VisitBlockFinishNext<'s, B, S>,
+    }
+
+    pub struct VisitBlockFinishNext<'s, B, S> {
+        fold_levels: FoldLevels<'s, B, S>,
+        level: &'s sketch::Level,
+    }
+
+    impl<'s, B, S> VisitBlockFinishNext<'s, B, S> {
+        pub fn block_flushed(mut self, level_seed: S) -> FoldLevels<'s, B, S> {
+            let state = &mut self.fold_levels.levels[self.level.index].state;
+            assert!(state.is_none());
+            *state = Some(LevelState::Flushed { level_seed, });
+            self.fold_levels
+        }
+    }
+
+    pub struct Done<'s, B, S> {
+        fold_levels: FoldLevels<'s, B, S>,
+    }
+
+    impl<'s, B, S> Done<'s, B, S> {
+        pub fn levels_iter<'a>(&'a self) -> impl Iterator<Item = (&'s sketch::Level, &'a S)> {
+            self.fold_levels
+                .levels
+                .iter()
+                .filter_map(|fold_level| {
+                    if let Some(LevelState::Flushed { ref level_seed, }) = fold_level.state {
+                        Some((fold_level.level, level_seed))
+                    } else {
+                        None
+                    }
+                })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         sketch,
         plan,
+        fold,
     };
 
     #[test]
@@ -210,6 +460,14 @@ mod tests {
                 plan::Instruction { level: &sketch.levels()[1], block_index: 3, op: plan::Op::BlockFinish },
                 plan::Instruction { level: &sketch.levels()[0], block_index: 0, op: plan::Op::WriteItem { block_item_index: 3 } },
                 plan::Instruction { level: &sketch.levels()[0], block_index: 0, op: plan::Op::BlockFinish },
+            ],
+        );
+
+        assert_eq!(
+            fold_identity(&sketch),
+            vec![
+                (&sketch.levels()[0], (sketch.levels()[0].items_count, sketch.levels()[0].blocks_count)),
+                (&sketch.levels()[1], (sketch.levels()[1].items_count, sketch.levels()[1].blocks_count)),
             ],
         );
     }
@@ -261,90 +519,36 @@ mod tests {
                 plan::Instruction { level: &sketch.levels()[0], block_index: 0, op: plan::Op::BlockFinish },
             ],
         );
+
+        assert_eq!(
+            fold_identity(&sketch),
+            vec![
+                (&sketch.levels()[0], (sketch.levels()[0].items_count, sketch.levels()[0].blocks_count)),
+                (&sketch.levels()[1], (sketch.levels()[1].items_count, sketch.levels()[1].blocks_count)),
+                (&sketch.levels()[2], (sketch.levels()[2].items_count, sketch.levels()[2].blocks_count)),
+            ],
+        );
+    }
+
+    fn fold_identity<'s>(sketch: &'s sketch::Tree) -> Vec<(&'s sketch::Level, (usize, usize))> {
+        struct Block;
+        let mut fold = fold::fold_levels(sketch);
+        loop {
+            fold = match fold.next() {
+                fold::Instruction::Done(done) =>
+                    return done.levels_iter().map(|value| (value.0, value.1.clone())).collect(),
+                fold::Instruction::VisitLevel(fold::VisitLevel { next, .. }) => {
+                    let fold::VisitBlockStart { level_seed, next, .. } =
+                        next.level_ready((0, 0));
+                    next.block_ready(Block, level_seed)
+                },
+                fold::Instruction::VisitBlockStart(fold::VisitBlockStart { level_seed, next, .. }) =>
+                    next.block_ready(Block, level_seed),
+                fold::Instruction::VisitItem(fold::VisitItem { level_seed: (items, blocks), block: Block, next, .. }) =>
+                    next.item_ready(Block, (items + 1, blocks)),
+                fold::Instruction::VisitBlockFinish(fold::VisitBlockFinish { level_seed: (items, blocks), block: Block, next, .. }) =>
+                    next.block_flushed((items, blocks + 1)),
+            }
+        }
     }
 }
-
-// #[derive(Debug)]
-// pub enum BuildError<IE, WE> {
-//     Iter(IE),
-//     Writer(WE),
-// }
-
-// pub trait Writer {
-//     type Item;
-//     type Error;
-//     type Position;
-//     type Block;
-//     type Result;
-
-//     fn empty_pos(&self) -> Self::Position;
-//     fn make_block(&self) -> Result<Self::Block, Self::Error>;
-//     fn write_item(&mut self, block: &mut Self::Block, item: Self::Item, child_block_pos: Self::Position) -> Result<(), Self::Error>;
-//     fn flush_block(&mut self, block: Self::Block) -> Result<Self::Position, Self::Error>;
-//     fn finish(self, root_block_pos: Self::Position) -> Result<Self::Result, Self::Error>;
-// }
-
-// pub fn build<I, W, E>(
-//     mut src: I,
-//     src_len: usize,
-//     mut dst: W,
-//     min_tree_height: usize,
-//     max_block_size: usize,
-// ) ->
-//     Result<W::Result, BuildError<E, W::Error>>
-// where
-//     I: Iterator<Item = Result<W::Item, E>>,
-//     W: Writer,
-// {
-//     let mut index_block_size = max_block_size + 1;
-//     let mut tree_height = min_tree_height;
-//     while src_len > 0 && index_block_size > max_block_size {
-//         index_block_size = (src_len as f64).powf(1.0 / tree_height as f64) as usize;
-//         tree_height += 1;
-//     }
-//     let root_block_pos = build_block(&mut src, 0, src_len, index_block_size, &mut dst)?;
-//     dst.finish(root_block_pos).map_err(|e| BuildError::Writer(e))
-// }
-
-// fn build_block<T, E, P, I, IE, W>(
-//     src: &mut I,
-//     block_start: usize,
-//     block_end: usize,
-//     block_size: usize,
-//     dst: &mut W,
-// )
-//     -> Result<P, BuildError<IE, E>>
-// where I: Iterator<Item = Result<T, IE>>,
-//       W: Writer<Item = T, Error = E, Position = P>,
-// {
-//     let interval = block_end - block_start;
-//     let (index_start, index_inc) = if interval > block_size {
-//         (interval - (interval / block_size * (block_size - 1)) - 1, interval / block_size)
-//     } else {
-//         (0, 1)
-//     };
-
-//     let mut block = dst.make_block()
-//         .map_err(|e| BuildError::Writer(e))?;
-//     let mut node_block_start = block_start;
-//     let mut node_block_end = block_start + index_start;
-//     while node_block_end < block_end {
-//         let child_block_pos = if node_block_start < node_block_end {
-//             build_block(src, node_block_start, node_block_end, block_size, dst)?
-//         } else {
-//             dst.empty_pos()
-//         };
-
-//         if let Some(maybe_item) = src.next() {
-//             dst.write_item(&mut block, maybe_item.map_err(|e| BuildError::Iter(e))?, child_block_pos)
-//                 .map_err(|e| BuildError::Writer(e))?;
-//         } else {
-//             break
-//         }
-
-//         node_block_start = node_block_end + 1;
-//         node_block_end += index_inc;
-//     }
-
-//     dst.flush_block(block).map_err(|e| BuildError::Writer(e))
-// }
