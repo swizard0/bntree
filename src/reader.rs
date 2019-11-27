@@ -13,8 +13,7 @@ pub trait Reader {
     fn jump(&mut self, cursor: Self::Cursor) -> Result<Option<Self::Cursor>, Self::Error>;
 }
 
-pub struct LookupBatch<'r, 'q, C, R, Q>
-{
+pub struct LookupBatch<'r, 'q, C, R, Q> {
     tree_reader: &'r mut R,
     queue: BinaryHeap<Pos<C, &'q Q>>,
 }
@@ -22,7 +21,7 @@ pub struct LookupBatch<'r, 'q, C, R, Q>
 impl<R, Q> LookupBatch<'_, '_, R::Cursor, R, Q> where R: Reader {
     pub fn new<'r, 'q, I>(tree_reader: &'r mut R, keys_iter: I) ->
         Result<LookupBatch<'r, 'q, R::Cursor, R, Q>, R::Error>
-    where I: Iterator<Item = &'q Q>
+    where I: Iterator<Item = &'q Q>,
     {
         let mut queue = BinaryHeap::new();
         for key in keys_iter {
