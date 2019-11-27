@@ -70,7 +70,9 @@ impl<'s> Iterator for Plan<'s> {
                     return Some(Instruction {
                         level: cursor.level,
                         block_index: cursor.block_index,
-                        op: Op::WriteItem { block_item_index: index, },
+                        op: Op::WriteItem {
+                            block_item_index: index,
+                        },
                     });
                 },
                 BlockCursor::Write { .. } => {
