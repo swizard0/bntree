@@ -1,4 +1,4 @@
-use super::{sketch, plan};
+use super::{plan, sketch};
 
 pub fn fold_levels<'s, B, S>(sketch: &'s sketch::Tree) -> FoldLevels<'s, B, S> {
     FoldLevels {
@@ -6,7 +6,10 @@ pub fn fold_levels<'s, B, S>(sketch: &'s sketch::Tree) -> FoldLevels<'s, B, S> {
         levels: sketch
             .levels()
             .iter()
-            .map(|level| Level { level, state: Some(LevelState::Init), })
+            .map(|level| Level {
+                level,
+                state: Some(LevelState::Init),
+            })
             .collect(),
     }
 }
@@ -38,7 +41,7 @@ impl<'s, B, S> FoldLevels<'s, B, S> {
         match self.plan.next() {
             None =>
                 Instruction::Done(Done { fold_levels: self, }),
-            Some(plan::Instruction { level, block_index, op: plan::Op::BlockStart, }) => {
+            Some(plan::Instruction { op: plan::Op::BlockStart, level, block_index, }) => {
                 assert!(level.index < self.levels.len());
                 match self.levels[level.index].state.take() {
                     None =>
@@ -71,7 +74,7 @@ impl<'s, B, S> FoldLevels<'s, B, S> {
                     },
                 }
             },
-            Some(plan::Instruction { level, block_index, op: plan::Op::WriteItem { block_item_index, }, .. }) => {
+            Some(plan::Instruction { op: plan::Op::WriteItem { block_item_index }, level, block_index, .. }) => {
                 assert!(level.index < self.levels.len());
                 match self.levels[level.index].state.take() {
                     None =>
@@ -97,7 +100,7 @@ impl<'s, B, S> FoldLevels<'s, B, S> {
                         panic!("block is already flushed for WriteItem"),
                 }
             },
-            Some(plan::Instruction { level, block_index, op: plan::Op::BlockFinish, }) => {
+            Some(plan::Instruction { op: plan::Op::BlockFinish, level, block_index, }) => {
                 assert!(level.index < self.levels.len());
                 match self.levels[level.index].state.take() {
                     None =>
@@ -175,7 +178,11 @@ impl<'s, B, S> VisitBlockStartNext<'s, B, S> {
     pub fn block_ready(mut self, block: B, level_seed: S) -> FoldLevels<'s, B, S> {
         let state = &mut self.fold_levels.levels[self.level.index].state;
         assert!(state.is_none());
-        *state = Some(LevelState::Active { level_seed, block, block_index: self.block_index, });
+        *state = Some(LevelState::Active {
+            level_seed,
+            block,
+            block_index: self.block_index,
+        });
         self.fold_levels
     }
 }
@@ -199,7 +206,11 @@ impl<'s, B, S> VisitItemNext<'s, B, S> {
     pub fn item_ready(mut self, block: B, level_seed: S) -> FoldLevels<'s, B, S> {
         let state = &mut self.fold_levels.levels[self.level.index].state;
         assert!(state.is_none());
-        *state = Some(LevelState::Active { level_seed, block, block_index: self.block_index, });
+        *state = Some(LevelState::Active {
+            level_seed,
+            block,
+            block_index: self.block_index,
+        });
         self.fold_levels
     }
 }
@@ -232,15 +243,12 @@ pub struct Done<'s, B, S> {
 
 impl<'s, B, S> Done<'s, B, S> {
     pub fn levels_iter<'a>(&'a self) -> impl Iterator<Item = (&'s sketch::Level, &'a S)> {
-        self.fold_levels
-            .levels
-            .iter()
-            .filter_map(|fold_level| {
-                if let Some(LevelState::Flushed { ref level_seed, }) = fold_level.state {
-                    Some((fold_level.level, level_seed))
-                } else {
-                    None
-                }
-            })
+        self.fold_levels.levels.iter().filter_map(|fold_level| {
+            if let Some(LevelState::Flushed { ref level_seed, }) = fold_level.state {
+                Some((fold_level.level, level_seed))
+            } else {
+                None
+            }
+        })
     }
 }
