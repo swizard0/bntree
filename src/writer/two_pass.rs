@@ -109,15 +109,13 @@ impl<'s, B1, B2, O> WriteBlocks<'s, B1, B2, O> where O: Add<Output = O> + Clone 
             },
             Pass::Write(write) => match write.fold_levels.next() {
                 fold::Instruction::VisitLevel(fold::VisitLevel { level, next, }) => {
-                    let level_offset = write
-                        .levels_markup
-                        .levels_iter()
-                        .fold(
-                            self.coords.header_size.clone(),
-                            |offset, (_level, level_seed)| {
-                                offset + level_seed.level_size.clone()
-                            }
-                        );
+                    let mut level_offset = self.coords.header_size.clone();
+                    for (markup_level, level_seed) in write.levels_markup.levels_iter() {
+                        if markup_level.index >= level.index {
+                            break;
+                        }
+                        level_offset = level_offset + level_seed.level_size.clone();
+                    }
                     Instruction::WriteLevelHeader(WriteLevelHeader {
                         level,
                         level_offset,
