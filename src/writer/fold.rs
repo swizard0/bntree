@@ -242,6 +242,10 @@ pub struct Done<'s, B, S> {
 }
 
 impl<'s, B, S> Done<'s, B, S> {
+    pub fn sketch(&self) -> &'s sketch::Tree {
+        self.fold_levels.plan.sketch
+    }
+
     pub fn levels_iter<'a>(&'a self) -> impl Iterator<Item = (&'s sketch::Level, &'a S)> {
         self.fold_levels.levels.iter().filter_map(|fold_level| {
             if let Some(LevelState::Flushed { ref level_seed, }) = fold_level.state {
