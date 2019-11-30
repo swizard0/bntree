@@ -90,7 +90,7 @@ impl<'s, B1, B2, O> WriteBlocks<'s, B1, B2, O> where O: Add<Output = O> + Clone 
                     if let Some((level, markup)) = iter.next() {
                         let markup_car = LevelMarkup { level, markup, };
                         let mut markup_cdr = Vec::new();
-                        let mut tree_total_size =
+                        let mut tree_total_size = self.coords.header_size.clone() +
                             markup_car.markup.level_size.clone();
                         for (level, markup) in iter {
                             tree_total_size = tree_total_size +
@@ -533,7 +533,10 @@ impl<'s, B1, B2, O> FlushBlockNext<'s, B1, B2, O> {
         WriteBlocks {
             inner: Pass::Write(Write {
                 fold_levels: self.fold_levels_next.block_flushed(
-                    self.level_seed,
+                    WriteLevelSeed {
+                        block_offset: self.level_seed.cursor.clone(),
+                        ..self.level_seed
+                    },
                 ),
                 levels_markup: self.levels_markup,
                 recent_block_offset,
