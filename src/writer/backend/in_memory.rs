@@ -86,7 +86,7 @@ impl<'s> InMemory<'s> {
                     assert_eq!(offset, 0);
                     let tree_header_size = self.inner.storage.memory.len();
                     assert!(tree_total_size >= tree_header_size);
-                    self.inner.storage.memory.resize(tree_total_size, 0);
+                    self.inner.storage.memory.resize(tree_total_size, 0xff);
                     return Instruction::PassWrite(InMemory {
                         inner_fsm: next.tree_header_written(tree_header_size),
                         inner: self.inner,
