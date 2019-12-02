@@ -6,8 +6,8 @@ use serde_derive::{
 };
 
 use super::super::{
-    sketch,
     two_pass,
+    super::sketch,
 };
 
 const MAGIC: u64 = 0x680f9a7a8b7a680d;

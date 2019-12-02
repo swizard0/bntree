@@ -1,6 +1,6 @@
 use bincode;
 
-use super::super::sketch;
+use super::super::super::sketch;
 use super::in_memory;
 
 #[test]

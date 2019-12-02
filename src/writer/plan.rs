@@ -1,4 +1,4 @@
-use super::sketch;
+use super::super::sketch;
 
 pub fn build<'s>(sketch: &'s sketch::Tree) -> Plan<'s> {
     Plan {

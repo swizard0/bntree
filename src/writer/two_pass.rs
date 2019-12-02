@@ -3,7 +3,10 @@ use std::{
     marker::PhantomData,
 };
 
-use super::{fold, sketch};
+use super::{
+    fold,
+    super::sketch,
+};
 
 pub fn write_blocks<'s, B1, B2, O>(
     sketch: &'s sketch::Tree,

@@ -1,4 +1,7 @@
-use super::{plan, sketch};
+use super::{
+    plan,
+    super::sketch,
+};
 
 pub fn fold_levels<'s, B, S>(sketch: &'s sketch::Tree) -> FoldLevels<'s, B, S> {
     FoldLevels {

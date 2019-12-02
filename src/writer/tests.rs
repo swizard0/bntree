@@ -1,8 +1,8 @@
 use super::{
-    sketch,
     plan,
     fold,
     two_pass,
+    super::sketch,
 };
 
 #[test]
