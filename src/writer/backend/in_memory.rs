@@ -63,18 +63,18 @@ impl<'s> InMemory<'s> {
                     self.inner_fsm = next.block_ready(BlockWriter::new(
                         self.inner.available_blocks.pop().unwrap_or_else(Vec::new),
                     )),
-                two_pass::Instruction::WriteMarkupItem(two_pass::WriteMarkupItem { block, next, .. }) =>
+                two_pass::Instruction::WriteMarkupItem(two_pass::WriteMarkupItem { block, child_pending, next, .. }) =>
                     return Instruction::WriteItem(WriteItem {
                         block_writer: block,
                         next: WriteItemNext {
-                            inner_fsm_next: WriteItemPass::Markup(next),
+                            inner_fsm_next: WriteItemPass::Markup { next, child_pending, },
                             inner: self.inner,
                         },
                     }),
                 two_pass::Instruction::FinishMarkupBlock(two_pass::FinishMarkupBlock { block: block_writer, next, .. }) => {
                     let items_total = block_writer.items_count as u32;
                     let mut block_memory = block_writer.into_inner();
-                    let mut rewrite_cursor = io::Cursor::new(&mut block_memory);
+                    let mut rewrite_cursor = io::Cursor::new(block_memory.as_mut_slice());
                     bincode::serialize_into(&mut rewrite_cursor, &items_total).unwrap();
                     return Instruction::FlushBlock(FlushBlockNext {
                         inner_fsm_next: FlushBlockPass::Markup(next),
@@ -108,8 +108,11 @@ impl<'s> InMemory<'s> {
                     let header_size = block_writer.header_size;
                     self.inner_fsm = next.block_header_written(block_writer, header_size);
                 },
-                two_pass::Instruction::WriteBlockItem(two_pass::WriteBlockItem { block_meta, child_block_offset, next, .. }) => {
+                two_pass::Instruction::WriteBlockItem(two_pass::WriteBlockItem { block_meta, child_block_offset, next, level, .. }) => {
                     let current_block_size = block_meta.get_ref().len();
+
+                    println!(" ** writeblockitem: level = {}, current_block_size = {}", level.index, current_block_size);
+
                     return Instruction::WriteItem(WriteItem {
                         block_writer: block_meta,
                         next: WriteItemNext {
@@ -127,12 +130,17 @@ impl<'s> InMemory<'s> {
                     block_start_offset,
                     block_end_offset,
                     next,
+                    level,
                     ..
                 }) => {
+                    println!(" ** flushblock: level = {}, bytes = {}, items = {}, header_size = {}",
+                             level.index, block_writer.get_ref().len(), block_writer.items_count, block_writer.header_size);
+
                     let items_total = block_writer.items_count as u32;
                     let mut block_memory = block_writer.into_inner();
-                    let mut rewrite_cursor = io::Cursor::new(&mut block_memory);
+                    let mut rewrite_cursor = io::Cursor::new(block_memory.as_mut_slice());
                     bincode::serialize_into(&mut rewrite_cursor, &items_total).unwrap();
+
                     return Instruction::FlushBlock(FlushBlockNext {
                         inner_fsm_next: FlushBlockPass::Write {
                             block_start_offset,
@@ -169,7 +177,10 @@ pub struct WriteItemNext<'s> {
 }
 
 enum WriteItemPass<'s> {
-    Markup(two_pass::WriteMarkupItemNext<'s, BlockWriter, BlockWriter, usize>),
+    Markup {
+        next: two_pass::WriteMarkupItemNext<'s, BlockWriter, BlockWriter, usize>,
+        child_pending: bool,
+    },
     Write {
         next: two_pass::WriteBlockItemNext<'s, BlockWriter, BlockWriter, usize>,
         current_block_size: usize,
@@ -180,8 +191,8 @@ enum WriteItemPass<'s> {
 impl<'s> WriteItemNext<'s> {
     pub fn item_written(self, mut block_writer: BlockWriter) -> InMemory<'s> {
         match self.inner_fsm_next {
-            WriteItemPass::Markup(next) => {
-                let no_child: Option<usize> = None;
+            WriteItemPass::Markup { next, child_pending, } => {
+                let no_child: Option<usize> = if child_pending { Some(0) } else { None };
                 bincode::serialize_into(&mut block_writer, &no_child).unwrap();
                 block_writer.items_count += 1;
                 InMemory {
@@ -237,7 +248,7 @@ impl<'s> FlushBlockNext<'s> {
                     .memory[block_start_offset .. block_end_offset];
                 flush_area.copy_from_slice(&self.block);
                 InMemory {
-                    inner_fsm: next.block_flushed(),
+                    inner_fsm: next.block_flushed(block_size),
                     inner: self.inner,
                 }
             },
@@ -247,20 +258,24 @@ impl<'s> FlushBlockNext<'s> {
     }
 
     pub fn modified_block_flushed(mut self, modified_memory: &[u8]) -> InMemory<'s> {
+        let block_size = modified_memory.len();
         self.inner.available_blocks.push(self.block);
         match self.inner_fsm_next {
-            FlushBlockPass::Markup(next) =>
+            FlushBlockPass::Markup(next) => {
+                println!(" -- modified_block_flushed / markup: modified_memory.len() = {}", block_size);
+
                 InMemory {
                     inner_fsm: next.block_finished(modified_memory.len()),
                     inner: self.inner,
-                },
-            FlushBlockPass::Write { block_start_offset, block_end_offset, next, } => {
-                assert_eq!(modified_memory.len(), block_end_offset - block_start_offset);
-                let flush_area = &mut self.inner.storage
-                    .memory[block_start_offset .. block_end_offset];
+                }
+            },
+            FlushBlockPass::Write { block_start_offset, next, .. } => {
+                println!(" -- modified_block_flushed / write: modified_memory.len() = {}, block_start_offset = {}", block_size, block_start_offset);
+
+                let flush_area = &mut self.inner.storage.memory[block_start_offset .. block_start_offset + block_size];
                 flush_area.copy_from_slice(modified_memory);
                 InMemory {
-                    inner_fsm: next.block_flushed(),
+                    inner_fsm: next.block_flushed(block_size),
                     inner: self.inner,
                 }
             },

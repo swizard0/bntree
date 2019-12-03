@@ -18,6 +18,7 @@ pub fn write_blocks<'s, B1, B2, O>(
     WriteBlocks {
         inner: Pass::Markup(Markup {
             fold_levels: fold::fold_levels(sketch),
+            child_pending: false,
             _marker: PhantomData,
         }),
         coords: TreeCoords {
@@ -52,6 +53,7 @@ impl<'s, B1, B2, O> WriteBlocks<'s, B1, B2, O> where O: Add<Output = O> + Clone 
                         next: InitialLevelSizeNext {
                             fold_levels_next: next,
                             tree_coords: self.coords,
+                            child_pending: markup.child_pending,
                             _marker: PhantomData,
                         },
                     }),
@@ -61,6 +63,7 @@ impl<'s, B1, B2, O> WriteBlocks<'s, B1, B2, O> where O: Add<Output = O> + Clone 
                         next: AllocMarkupBlockNext {
                             fold_levels_next: next,
                             tree_coords: self.coords,
+                            child_pending: markup.child_pending,
                             level_seed,
                             _marker: PhantomData,
                         },
@@ -69,6 +72,7 @@ impl<'s, B1, B2, O> WriteBlocks<'s, B1, B2, O> where O: Add<Output = O> + Clone 
                     Instruction::WriteMarkupItem(WriteMarkupItem {
                         level,
                         block,
+                        child_pending: markup.child_pending,
                         next: WriteMarkupItemNext {
                             fold_levels_next: next,
                             tree_coords: self.coords,
@@ -220,6 +224,7 @@ pub enum Instruction<'s, B1, B2, O> {
 // Markup
 struct Markup<'s, B1, B2, O> {
     fold_levels: fold::FoldLevels<'s, B1, MarkupLevelSeed<O>>,
+    child_pending: bool,
     _marker: PhantomData<B2>,
 }
 
@@ -237,6 +242,7 @@ pub struct InitialLevelSize<'s, B1, B2, O> {
 pub struct InitialLevelSizeNext<'s, B1, B2, O> {
     fold_levels_next: fold::VisitLevelNext<'s, B1, MarkupLevelSeed<O>>,
     tree_coords: TreeCoords<O>,
+    child_pending: bool,
     _marker: PhantomData<B2>,
 }
 
@@ -252,6 +258,7 @@ impl<'s, B1, B2, O> InitialLevelSizeNext<'s, B1, B2, O> where O: Clone {
             next: AllocMarkupBlockNext {
                 fold_levels_next,
                 tree_coords: self.tree_coords,
+                child_pending: self.child_pending,
                 level_seed,
                 _marker: PhantomData,
             },
@@ -268,6 +275,7 @@ pub struct AllocMarkupBlock<'s, B1, B2, O> {
 pub struct AllocMarkupBlockNext<'s, B1, B2, O> {
     fold_levels_next: fold::VisitBlockStartNext<'s, B1, MarkupLevelSeed<O>>,
     tree_coords: TreeCoords<O>,
+    child_pending: bool,
     level_seed: MarkupLevelSeed<O>,
     _marker: PhantomData<B2>,
 }
@@ -284,6 +292,7 @@ impl<'s, B1, B2, O> AllocMarkupBlockNext<'s, B1, B2, O> {
                     block,
                     self.level_seed,
                 ),
+                child_pending: self.child_pending,
                 _marker: PhantomData,
             }),
             coords: self.tree_coords,
@@ -295,6 +304,7 @@ impl<'s, B1, B2, O> AllocMarkupBlockNext<'s, B1, B2, O> {
 pub struct WriteMarkupItem<'s, B1, B2, O> {
     pub level: &'s sketch::Level,
     pub block: B1,
+    pub child_pending: bool,
     pub next: WriteMarkupItemNext<'s, B1, B2, O>,
 }
 
@@ -317,6 +327,7 @@ impl<'s, B1, B2, O> WriteMarkupItemNext<'s, B1, B2, O> {
                     block,
                     self.level_seed,
                 ),
+                child_pending: false,
                 _marker: PhantomData,
             }),
             coords: self.tree_coords,
@@ -351,6 +362,7 @@ impl<'s, B1, B2, O> FinishMarkupBlockNext<'s, B1, B2, O> where O: Add<Output = O
                     level_header_size: self.level_seed.level_header_size,
                     level_size,
                 }),
+                child_pending: true,
                 _marker: PhantomData,
             }),
             coords: self.tree_coords,
@@ -530,14 +542,14 @@ pub struct FlushBlockNext<'s, B1, B2, O> {
 }
 
 impl<'s, B1, B2, O> FlushBlockNext<'s, B1, B2, O> {
-    pub fn block_flushed(self) -> WriteBlocks<'s, B1, B2, O> where O: Clone {
+    pub fn block_flushed(self, actual_block_size: O) -> WriteBlocks<'s, B1, B2, O> where O: Clone + Add<Output = O> {
         let recent_block_offset =
             Some(self.level_seed.block_offset.clone());
         WriteBlocks {
             inner: Pass::Write(Write {
                 fold_levels: self.fold_levels_next.block_flushed(
                     WriteLevelSeed {
-                        block_offset: self.level_seed.cursor.clone(),
+                        block_offset: self.level_seed.block_offset.clone() + actual_block_size,
                         ..self.level_seed
                     },
                 ),
