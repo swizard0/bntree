@@ -1,29 +1,46 @@
 use super::super::sketch;
 
-pub fn build() -> Instruction {
-    Instruction::TreeStart { next: Plan { inner: Mode::Init, }, }
-}
-
 pub enum Instruction {
-    TreeStart { next: Plan, },
-    BlockStart { level_index: usize, block_index: usize, next: Plan, },
-    WriteItem { level_index: usize, block_index: usize, item_index: usize, next: Plan, },
-    BlockFinish { level_index: usize, block_index: usize, next: Plan, },
+    Perform(Perform),
     Done,
 }
 
-pub struct Plan {
-    inner: Mode,
+pub struct Perform {
+    pub op: Op,
+    pub next: Script,
 }
 
-enum Mode {
+pub enum Op {
+    TreeStart,
+    Block(PerformBlock),
+}
+
+pub struct PerformBlock {
+    pub level_index: usize,
+    pub block_index: usize,
+    pub op: BlockOp,
+}
+
+pub enum BlockOp {
+    Start,
+    Item { index: usize, },
+    Finish,
+}
+
+
+pub struct Script {
+    inner: Fsm,
+}
+
+enum Fsm {
     Init,
-    Progress {
-        cursors: Vec<LevelCursor>,
-        level_curr: usize,
-        level_base: usize,
-    },
-    Done,
+    Busy(Busy),
+}
+
+struct Busy {
+    cursors: Vec<LevelCursor>,
+    level_curr: usize,
+    level_base: usize,
 }
 
 struct LevelCursor {
@@ -38,77 +55,95 @@ enum BlockCursor {
     Write { index: usize, },
 }
 
-impl Plan {
-    pub fn next(mut self, sketch: &sketch::Tree) -> Instruction {
-        loop {
-            match self.inner {
-                Mode::Init =>
-                    self.inner = Mode::Progress {
-                        cursors: sketch
-                            .levels()
-                            .iter()
-                            .rev()
-                            .map(|level| LevelCursor {
-                                level_index: level.index,
-                                block_index: 0,
-                                block_cursor: BlockCursor::Start,
-                                items_remain: level.items_count,
-                            })
-                            .collect(),
-                        level_curr: 0,
-                        level_base: 0,
+impl Script {
+    pub fn start() -> Instruction {
+        Instruction::Perform(Perform { op: Op::TreeStart, next: Script { inner: Fsm::Init, }, })
+    }
+
+    pub fn step(self, sketch: &sketch::Tree) -> Instruction {
+        match self.inner {
+            Fsm::Init =>
+                Busy {
+                    cursors: sketch
+                        .levels()
+                        .iter()
+                        .rev()
+                        .map(|level| LevelCursor {
+                            level_index: level.index,
+                            block_index: 0,
+                            block_cursor: BlockCursor::Start,
+                            items_remain: level.items_count,
+                        })
+                        .collect(),
+                    level_curr: 0,
+                    level_base: 0,
+                },
+            Fsm::Busy(busy) =>
+                busy,
+        }.step(sketch)
+    }
+}
+
+impl Busy {
+    fn step(mut self, sketch: &sketch::Tree) -> Instruction {
+        if self.level_curr < self.cursors.len() {
+            let cursor = &mut self.cursors[self.level_curr];
+            if cursor.items_remain == 0 {
+                return Instruction::Perform(Perform {
+                    op: Op::Block(PerformBlock {
+                        op: BlockOp::Finish,
+                        level_index: cursor.level_index,
+                        block_index: cursor.block_index,
+                    }),
+                    next: Script {
+                        inner: Fsm::Busy(Busy {
+                            level_base: self.level_base + 1,
+                            level_curr: self.level_base + 1,
+                            ..self
+                        }),
                     },
-                Mode::Progress { ref cursors, level_curr, .. } if level_curr >= cursors.len() =>
-                    self.inner = Mode::Done,
-                Mode::Progress { mut cursors, level_curr, level_base, } => {
-                    let cursor = &mut cursors[level_curr];
-                    if cursor.items_remain == 0 {
-                        return Instruction::BlockFinish {
+                });
+            }
+            match cursor.block_cursor {
+                BlockCursor::Start => {
+                    cursor.block_cursor = BlockCursor::Write { index: 0, };
+                    return Instruction::Perform(Perform {
+                        op: Op::Block(PerformBlock {
+                            op: BlockOp::Start,
                             level_index: cursor.level_index,
                             block_index: cursor.block_index,
-                            next: Plan {
-                                inner: Mode::Progress {
-                                    cursors,
-                                    level_base: level_base + 1,
-                                    level_curr: level_base + 1,
-                                },
-                            },
-                        };
-                    }
-                    match cursor.block_cursor {
-                        BlockCursor::Start => {
-                            cursor.block_cursor = BlockCursor::Write { index: 0, };
-                            return Instruction::BlockStart {
-                                level_index: cursor.level_index,
-                                block_index: cursor.block_index,
-                                next: Plan { inner: Mode::Progress { cursors, level_curr, level_base, }, },
-                            };
-                        },
-                        BlockCursor::Write { index, } if index < sketch.block_size() => {
-                            cursor.block_cursor = BlockCursor::Write { index: index + 1, };
-                            cursor.items_remain -= 1;
-                            return Instruction::WriteItem {
-                                level_index: cursor.level_index,
-                                block_index: cursor.block_index,
-                                item_index: index,
-                                next: Plan { inner: Mode::Progress { cursors, level_curr: level_base, level_base, }, },
-                            };
-                        },
-                        BlockCursor::Write { .. } => {
-                            cursor.block_cursor = BlockCursor::Start;
-                            let block_index = cursor.block_index;
-                            cursor.block_index += 1;
-                            return Instruction::BlockFinish {
-                                level_index: cursor.level_index,
-                                block_index,
-                                next: Plan { inner: Mode::Progress { cursors, level_curr: level_curr + 1, level_base, }, },
-                            };
-                        },
-                    }
+                        }),
+                        next: Script { inner: Fsm::Busy(self), },
+                    });
                 },
-                Mode::Done =>
-                    return Instruction::Done,
+                BlockCursor::Write { index, } if index < sketch.block_size() => {
+                    cursor.block_cursor = BlockCursor::Write { index: index + 1, };
+                    cursor.items_remain -= 1;
+                    return Instruction::Perform(Perform {
+                        op: Op::Block(PerformBlock {
+                            op: BlockOp::Item { index, },
+                            level_index: cursor.level_index,
+                            block_index: cursor.block_index,
+                        }),
+                        next: Script { inner: Fsm::Busy(Busy { level_curr: self.level_base, ..self }) },
+                    });
+                },
+                BlockCursor::Write { .. } => {
+                    cursor.block_cursor = BlockCursor::Start;
+                    let block_index = cursor.block_index;
+                    cursor.block_index += 1;
+                    return Instruction::Perform(Perform {
+                        op: Op::Block(PerformBlock {
+                            op: BlockOp::Finish,
+                            level_index: cursor.level_index,
+                            block_index,
+                        }),
+                        next: Script { inner: Fsm::Busy(Busy { level_curr: self.level_curr + 1, ..self }), },
+                    });
+                },
             }
+        } else {
+            Instruction::Done
         }
     }
 }

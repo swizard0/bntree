@@ -89,24 +89,28 @@ enum Instruction {
 fn interpret_script(sketch: &sketch::Tree, mut script: Vec<Instruction>) {
     script.reverse();
 
-    let mut instr = plan::build();
+    let mut instr = plan::Script::start();
     loop {
+        use plan::{Perform, Op, PerformBlock, BlockOp};
+
         match instr {
-            plan::Instruction::TreeStart { next, } => {
+            plan::Instruction::Perform(Perform { op: Op::TreeStart, next, }) => {
                 assert_eq!(script.pop(), Some(Instruction::TreeStart));
-                instr = next.next(sketch);
+                instr = next.step(sketch);
             },
-            plan::Instruction::BlockStart { level_index, block_index, next, } => {
+            plan::Instruction::Perform(Perform { op: Op::Block(PerformBlock { op: BlockOp::Start, level_index, block_index, }), next, }) => {
                 assert_eq!(script.pop(), Some(Instruction::BlockStart { level_index, block_index, }));
-                instr = next.next(sketch);
+                instr = next.step(sketch);
             },
-            plan::Instruction::WriteItem { level_index, block_index, item_index, next, } => {
+            plan::Instruction::Perform(
+                Perform { op: Op::Block(PerformBlock { op: BlockOp::Item { index: item_index, }, level_index, block_index, }), next, },
+            ) => {
                 assert_eq!(script.pop(), Some(Instruction::WriteItem { level_index, block_index, item_index, }));
-                instr = next.next(sketch);
+                instr = next.step(sketch);
             },
-            plan::Instruction::BlockFinish { level_index, block_index, next, } => {
+            plan::Instruction::Perform(Perform { op: Op::Block(PerformBlock { op: BlockOp::Finish, level_index, block_index, }), next, }) => {
                 assert_eq!(script.pop(), Some(Instruction::BlockFinish { level_index, block_index, }));
-                instr = next.next(sketch);
+                instr = next.step(sketch);
             },
             plan::Instruction::Done => {
                 assert_eq!(script.pop(), Some(Instruction::Done));
