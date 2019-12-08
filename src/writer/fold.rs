@@ -17,7 +17,7 @@ pub struct Perform<S> {
 pub enum Op<S> {
     VisitLevel(VisitLevel<S>),
     VisitBlockStart(VisitBlockStart<S>),
-    // VisitItem(VisitItem<S>),
+    VisitItem(VisitItem<S>),
     // VisitBlockFinish(VisitBlockFinish<S>),
 }
 
@@ -33,6 +33,13 @@ pub enum Error {
         prev_block_index: usize,
     },
     UnexpectedZeroBlockIndexForLevelStateFlushed,
+    InvalidPlanBlockItemLevelIndex,
+    WritingItemBeforeBlockInitialize,
+    WritingItemAfterBlockFlush,
+    WritingItemInWrongBlock {
+        block_index: usize,
+        active_block_index: usize,
+    },
 }
 
 pub struct Script<S> {
@@ -95,19 +102,18 @@ impl<S> Busy<S> {
                     op: plan::Op::Block(plan::PerformBlock { op: plan::BlockOp::Start, level_index, block_index, }),
                     next,
                 }
-            ) if level_index < self.levels.len() => {
+            ) if level_index < self.levels.len() =>
                 match self.levels[level_index].take() {
                     None =>
                         panic!("level state left in invalid state for BlockStart"),
-                    Some(LevelState::Init) if block_index == 0 => {
+                    Some(LevelState::Init) if block_index == 0 =>
                         Ok(Instruction::Perform(Perform {
                             op: Op::VisitLevel(VisitLevel {
                                 level_index,
                                 next: VisitLevelNext { level_index, busy: self, },
                             }),
                             next_plan: next.step(sketch),
-                        }))
-                    },
+                        })),
                     Some(LevelState::Init) =>
                         Err(Error::UnexpectedNonZeroBlockIndexForLevelStateInit),
                     Some(LevelState::Active { block_index: prev_block_index, .. }) =>
@@ -116,24 +122,23 @@ impl<S> Busy<S> {
                             block_index,
                             prev_block_index,
                         }),
-                    Some(LevelState::Flushed { .. }) if block_index > 0 => {
-//                         Instruction::VisitBlockStart(VisitBlockStart {
-//                             level,
-//                             level_seed,
-//                             block_index,
-//                             next: VisitBlockStartNext {
-//                                 fold_levels: self,
-//                                 level,
-//                                 block_index,
-//                             },
-//                         })
-//                     },
-                        unimplemented!()
-                    }
+                    Some(LevelState::Flushed { level_seed, }) if block_index > 0 =>
+                        Ok(Instruction::Perform(Perform {
+                            op: Op::VisitBlockStart(VisitBlockStart {
+                                level_index,
+                                level_seed,
+                                block_index,
+                                next: VisitBlockStartNext {
+                                    busy: self,
+                                    level_index,
+                                    block_index,
+                                },
+                            }),
+                            next_plan: next.step(sketch),
+                        })),
                     Some(LevelState::Flushed { .. }) =>
                         Err(Error::UnexpectedZeroBlockIndexForLevelStateFlushed),
-                }
-            },
+                },
             plan::Instruction::Perform(plan::Perform { op: plan::Op::Block(plan::PerformBlock { op: plan::BlockOp::Start, .. }), .. }) =>
                 Err(Error::InvalidPlanBlockStartLevelIndex),
 
@@ -142,9 +147,35 @@ impl<S> Busy<S> {
                     op: plan::Op::Block(plan::PerformBlock { op: plan::BlockOp::Item { index: item_index, }, level_index, block_index, }),
                     next,
                 },
-            ) => {
-                unimplemented!()
-            },
+            ) if level_index < self.levels.len() =>
+                match self.levels[level_index].take() {
+                    None =>
+                        panic!("level state left in invalid state for WriteItem"),
+                    Some(LevelState::Init) =>
+                        Err(Error::WritingItemBeforeBlockInitialize),
+                    Some(LevelState::Active { level_seed, block_index: active_block_index, }) if active_block_index == block_index =>
+                        Ok(Instruction::Perform(Perform {
+                            op: Op::VisitItem(VisitItem {
+                                level_index,
+                                level_seed,
+                                block_index,
+                                block_item_index: item_index,
+                                next: VisitItemNext {
+                                    busy: self,
+                                    level_index,
+                                    block_index,
+                                },
+                            }),
+                            next_plan: next.step(sketch),
+                        })),
+                    Some(LevelState::Active { block_index: active_block_index, .. }) =>
+                        Err(Error::WritingItemInWrongBlock { active_block_index, block_index, }),
+                    Some(LevelState::Flushed { .. }) =>
+                        Err(Error::WritingItemAfterBlockFlush),
+                },
+            plan::Instruction::Perform(plan::Perform { op: plan::Op::Block(plan::PerformBlock { op: plan::BlockOp::Item { .. }, .. }), .. }) =>
+                Err(Error::InvalidPlanBlockItemLevelIndex),
+
             plan::Instruction::Perform(
                 plan::Perform {
                     op: plan::Op::Block(plan::PerformBlock { op: plan::BlockOp::Finish, level_index, block_index, }),
@@ -153,12 +184,14 @@ impl<S> Busy<S> {
             ) => {
                 unimplemented!()
             },
+
             plan::Instruction::Done => {
                 unimplemented!()
             },
         }
     }
 }
+
 
 pub struct VisitLevel<S> {
     pub level_index: usize,
@@ -188,6 +221,7 @@ impl<S> VisitLevelNext<S> {
     }
 }
 
+
 pub struct VisitBlockStart<S> {
     pub level_index: usize,
     pub level_seed: S,
@@ -216,44 +250,40 @@ impl<S> VisitBlockStartNext<S> {
 }
 
 
+pub struct VisitItem<S> {
+    pub level_index: usize,
+    pub level_seed: S,
+    pub block_index: usize,
+    pub block_item_index: usize,
+    pub next: VisitItemNext<S>,
+}
+
+pub struct VisitItemNext<S> {
+    busy: Busy<S>,
+    level_index: usize,
+    block_index: usize,
+}
+
+impl<S> VisitItemNext<S> {
+    pub fn item_ready(mut self, level_seed: S, op: plan::Instruction, sketch: &sketch::Tree) -> Result<Instruction<S>, Error> {
+        let state = &mut self.busy.levels[self.level_index];
+        assert!(state.is_none());
+        *state = Some(LevelState::Active {
+            level_seed,
+            block_index: self.block_index,
+        });
+        Script {
+            inner: Fsm::Busy(self.busy),
+        }.step(op, sketch)
+    }
+}
+
+
 // impl<'s, B, S> FoldLevels<'s, B, S> {
 //     pub fn next(mut self) -> Instruction<'s, B, S> {
 //         match self.plan.next() {
 //             None =>
 //                 Instruction::Done(Done { fold_levels: self, }),
-//             Some(plan::Instruction { op: plan::Op::BlockStart, level, block_index, }) => {
-//                 assert!(level.index < self.levels.len());
-//                 match self.levels[level.index].state.take() {
-//                     None =>
-//                         panic!("level state left in invalid state for BlockStart"),
-//                     Some(LevelState::Init) => {
-//                         assert_eq!(block_index, 0);
-//                         Instruction::VisitLevel(VisitLevel {
-//                             level,
-//                             next: VisitLevelNext {
-//                                 fold_levels: self,
-//                                 level,
-//                             },
-//                         })
-//                     },
-//                     Some(LevelState::Active { block_index: prev_block_index, .. }) =>
-//                         panic!("new block {} while previous block {} is not finished on level {} for BlockStart",
-//                                block_index, prev_block_index, level.index),
-//                     Some(LevelState::Flushed { level_seed, }) => {
-//                         assert!(block_index > 0);
-//                         Instruction::VisitBlockStart(VisitBlockStart {
-//                             level,
-//                             level_seed,
-//                             block_index,
-//                             next: VisitBlockStartNext {
-//                                 fold_levels: self,
-//                                 level,
-//                                 block_index,
-//                             },
-//                         })
-//                     },
-//                 }
-//             },
 //             Some(plan::Instruction { op: plan::Op::WriteItem { block_item_index }, level, block_index, .. }) => {
 //                 assert!(level.index < self.levels.len());
 //                 match self.levels[level.index].state.take() {
