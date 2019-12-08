@@ -7,20 +7,30 @@ use super::super::{
 #[test]
 fn tree17_4() {
     let sketch = sketch::Tree::new(17, 4);
-    assert_eq!(interpret_fold(&sketch), vec![
-
-    ]);
+    assert_eq!(interpret_fold_count_items(&sketch), vec![(0, 4), (1, 13)]);
 }
 
-fn interpret_fold(sketch: &sketch::Tree) -> Vec<(usize, usize)> {
-    let mut plan_op = plan::Script::start()
+#[test]
+fn tree17_3() {
+    let sketch = sketch::Tree::new(17, 3);
+    assert_eq!(interpret_fold_count_items(&sketch), vec![(0, 3), (1, 9), (2, 5)]);
+}
+
+fn interpret_fold_count_items(sketch: &sketch::Tree) -> Vec<(usize, usize)> {
+    let plan_op = plan::Script::start()
         .step(sketch);
     let mut fold_op = fold::Script::start()
         .step(plan_op, sketch).unwrap();
     loop {
         match fold_op {
-            fold::Instruction::Perform(..) =>
-                unimplemented!(),
+            fold::Instruction::Perform(fold::Perform { op: fold::Op::VisitLevel(fold::VisitLevel { next, .. }), next_plan, }) =>
+                fold_op = next.level_ready(0, next_plan, sketch).unwrap(),
+            fold::Instruction::Perform(fold::Perform { op: fold::Op::VisitBlockStart(fold::VisitBlockStart { level_seed, next, .. }), next_plan, }) =>
+                fold_op = next.block_ready(level_seed, next_plan, sketch).unwrap(),
+            fold::Instruction::Perform(fold::Perform { op: fold::Op::VisitItem(fold::VisitItem { level_seed, next, .. }), next_plan, }) =>
+                fold_op = next.item_ready(level_seed + 1, next_plan, sketch).unwrap(),
+            fold::Instruction::Perform(fold::Perform { op: fold::Op::VisitBlockFinish(fold::VisitBlockFinish { level_seed, next, .. }), next_plan, }) =>
+                fold_op = next.block_flushed(level_seed, next_plan, sketch).unwrap(),
             fold::Instruction::Done(done) =>
                 return done.levels_iter().collect(),
         }
