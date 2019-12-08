@@ -4,7 +4,6 @@ use super::{
 };
 
 pub enum Instruction<S> {
-    TreeStart { next: Script<S>, },
     Perform(Perform<S>),
     Done(Done<S>),
 }
@@ -23,8 +22,6 @@ pub enum Op<S> {
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Error {
-    NoExpectedPlanTreeStart,
-    UnexpectedPlanTreeStart,
     InvalidPlanBlockStartLevelIndex,
     UnexpectedNonZeroBlockIndexForLevelStateInit,
     UnexpectedLevelStateActiveForPlanBlockStart {
@@ -75,24 +72,20 @@ enum LevelState<S> {
 
 
 impl<S> Script<S> {
-    pub fn start() -> Instruction<S> {
-        Instruction::TreeStart { next: Script { inner: Fsm::Init, } }
+    pub fn start() -> Script<S> {
+        Script { inner: Fsm::Init, }
     }
 
     pub fn step(self, op: plan::Instruction, sketch: &sketch::Tree) -> Result<Instruction<S>, Error> {
         match self.inner {
             Fsm::Init =>
-                if let plan::Instruction::Perform(plan::Perform { op: plan::Op::TreeStart, next, }) = op {
-                    Busy {
-                        levels: sketch
-                            .levels()
-                            .iter()
-                            .map(|_level| Some(LevelState::Init))
-                            .collect(),
-                    }.step(next.step(sketch), sketch)
-                } else {
-                    Err(Error::NoExpectedPlanTreeStart)
-                },
+                Busy {
+                    levels: sketch
+                        .levels()
+                        .iter()
+                        .map(|_level| Some(LevelState::Init))
+                        .collect(),
+                }.step(op, sketch),
             Fsm::Busy(busy) =>
                 busy.step(op, sketch),
         }
@@ -102,13 +95,8 @@ impl<S> Script<S> {
 impl<S> Busy<S> {
     fn step(mut self, op: plan::Instruction, sketch: &sketch::Tree) -> Result<Instruction<S>, Error> {
         match op {
-            plan::Instruction::Perform(plan::Perform { op: plan::Op::TreeStart, .. }) =>
-                Err(Error::UnexpectedPlanTreeStart),
             plan::Instruction::Perform(
-                plan::Perform {
-                    op: plan::Op::Block(plan::PerformBlock { op: plan::BlockOp::Start, level_index, block_index, }),
-                    next,
-                }
+                plan::Perform { op: plan::Op::BlockStart, level_index, block_index, next, }
             ) if level_index < self.levels.len() =>
                 match self.levels[level_index].take() {
                     None =>
@@ -146,13 +134,12 @@ impl<S> Busy<S> {
                     Some(LevelState::Flushed { .. }) =>
                         Err(Error::UnexpectedZeroBlockIndexForLevelStateFlushed),
                 },
-            plan::Instruction::Perform(plan::Perform { op: plan::Op::Block(plan::PerformBlock { op: plan::BlockOp::Start, .. }), .. }) =>
+            plan::Instruction::Perform(plan::Perform { op: plan::Op::BlockStart, .. }) =>
                 Err(Error::InvalidPlanBlockStartLevelIndex),
 
             plan::Instruction::Perform(
                 plan::Perform {
-                    op: plan::Op::Block(plan::PerformBlock { op: plan::BlockOp::Item { index: item_index, }, level_index, block_index, }),
-                    next,
+                    op: plan::Op::BlockItem { index: item_index, }, level_index, block_index, next,
                 },
             ) if level_index < self.levels.len() =>
                 match self.levels[level_index].take() {
@@ -180,14 +167,11 @@ impl<S> Busy<S> {
                     Some(LevelState::Flushed { .. }) =>
                         Err(Error::WritingItemAfterBlockFlush),
                 },
-            plan::Instruction::Perform(plan::Perform { op: plan::Op::Block(plan::PerformBlock { op: plan::BlockOp::Item { .. }, .. }), .. }) =>
+            plan::Instruction::Perform(plan::Perform { op: plan::Op::BlockItem { .. }, .. }) =>
                 Err(Error::InvalidPlanBlockItemLevelIndex),
 
             plan::Instruction::Perform(
-                plan::Perform {
-                    op: plan::Op::Block(plan::PerformBlock { op: plan::BlockOp::Finish, level_index, block_index, }),
-                    next,
-                }
+                plan::Perform { op: plan::Op::BlockFinish, level_index, block_index, next, }
             ) if level_index < self.levels.len() =>
                 match self.levels[level_index].take() {
                     None =>
@@ -212,7 +196,7 @@ impl<S> Busy<S> {
                     Some(LevelState::Flushed { .. }) =>
                         Err(Error::FinishingBlockAfterBlockFlush),
                 }
-            plan::Instruction::Perform(plan::Perform { op: plan::Op::Block(plan::PerformBlock { op: plan::BlockOp::Finish, .. }), .. }) =>
+            plan::Instruction::Perform(plan::Perform { op: plan::Op::BlockFinish, .. }) =>
                 Err(Error::InvalidPlanBlockFinisLevelIndex),
 
             plan::Instruction::Done =>
