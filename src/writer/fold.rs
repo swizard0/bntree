@@ -4,21 +4,35 @@ use super::{
 };
 
 pub enum Instruction<S> {
+    TreeStart { next: Script<S>, },
     Perform(Perform<S>),
     Done,
 }
 
 pub struct Perform<S> {
-    pub op: Op,
-    pub next: Script<S>,
+    pub op: Op<S>,
+    pub next_plan: plan::Instruction,
 }
 
-pub enum Op {
-    TreeStart,
+pub enum Op<S> {
+    VisitLevel(VisitLevel<S>),
+    VisitBlockStart(VisitBlockStart<S>),
+    // VisitItem(VisitItem<S>),
+    // VisitBlockFinish(VisitBlockFinish<S>),
 }
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Error {
+    NoExpectedPlanTreeStart,
+    UnexpectedPlanTreeStart,
+    InvalidPlanBlockStartLevelIndex,
+    UnexpectedNonZeroBlockIndexForLevelStateInit,
+    UnexpectedLevelStateActiveForPlanBlockStart {
+        level_index: usize,
+        block_index: usize,
+        prev_block_index: usize,
+    },
+    UnexpectedZeroBlockIndexForLevelStateFlushed,
 }
 
 pub struct Script<S> {
@@ -48,69 +62,159 @@ enum LevelState<S> {
 
 impl<S> Script<S> {
     pub fn start() -> Instruction<S> {
-        Instruction::Perform(Perform {
-            op: Op::TreeStart,
-            next: Script { inner: Fsm::Init, },
-        })
+        Instruction::TreeStart { next: Script { inner: Fsm::Init, } }
     }
 
     pub fn step(self, op: plan::Instruction, sketch: &sketch::Tree) -> Result<Instruction<S>, Error> {
         match self.inner {
             Fsm::Init =>
-                Busy {
-                    levels: sketch
-                        .levels()
-                        .iter()
-                        .map(|_level| Some(LevelState::Init))
-                        .collect(),
+                if let plan::Instruction::Perform(plan::Perform { op: plan::Op::TreeStart, next, }) = op {
+                    Busy {
+                        levels: sketch
+                            .levels()
+                            .iter()
+                            .map(|_level| Some(LevelState::Init))
+                            .collect(),
+                    }.step(next.step(sketch), sketch)
+                } else {
+                    Err(Error::NoExpectedPlanTreeStart)
                 },
             Fsm::Busy(busy) =>
-                busy,
-        }.step(op, sketch)
+                busy.step(op, sketch),
+        }
     }
 }
 
 impl<S> Busy<S> {
-    fn step(self, op: plan::Instruction, sketch: &sketch::Tree) -> Result<Instruction<S>, Error> {
-	unimplemented!()
+    fn step(mut self, op: plan::Instruction, sketch: &sketch::Tree) -> Result<Instruction<S>, Error> {
+        match op {
+            plan::Instruction::Perform(plan::Perform { op: plan::Op::TreeStart, .. }) =>
+                Err(Error::UnexpectedPlanTreeStart),
+            plan::Instruction::Perform(
+                plan::Perform {
+                    op: plan::Op::Block(plan::PerformBlock { op: plan::BlockOp::Start, level_index, block_index, }),
+                    next,
+                }
+            ) if level_index < self.levels.len() => {
+                match self.levels[level_index].take() {
+                    None =>
+                        panic!("level state left in invalid state for BlockStart"),
+                    Some(LevelState::Init) if block_index == 0 => {
+                        Ok(Instruction::Perform(Perform {
+                            op: Op::VisitLevel(VisitLevel {
+                                level_index,
+                                next: VisitLevelNext { level_index, busy: self, },
+                            }),
+                            next_plan: next.step(sketch),
+                        }))
+                    },
+                    Some(LevelState::Init) =>
+                        Err(Error::UnexpectedNonZeroBlockIndexForLevelStateInit),
+                    Some(LevelState::Active { block_index: prev_block_index, .. }) =>
+                        Err(Error::UnexpectedLevelStateActiveForPlanBlockStart {
+                            level_index,
+                            block_index,
+                            prev_block_index,
+                        }),
+                    Some(LevelState::Flushed { .. }) if block_index > 0 => {
+//                         Instruction::VisitBlockStart(VisitBlockStart {
+//                             level,
+//                             level_seed,
+//                             block_index,
+//                             next: VisitBlockStartNext {
+//                                 fold_levels: self,
+//                                 level,
+//                                 block_index,
+//                             },
+//                         })
+//                     },
+                        unimplemented!()
+                    }
+                    Some(LevelState::Flushed { .. }) =>
+                        Err(Error::UnexpectedZeroBlockIndexForLevelStateFlushed),
+                }
+            },
+            plan::Instruction::Perform(plan::Perform { op: plan::Op::Block(plan::PerformBlock { op: plan::BlockOp::Start, .. }), .. }) =>
+                Err(Error::InvalidPlanBlockStartLevelIndex),
+
+            plan::Instruction::Perform(
+                plan::Perform {
+                    op: plan::Op::Block(plan::PerformBlock { op: plan::BlockOp::Item { index: item_index, }, level_index, block_index, }),
+                    next,
+                },
+            ) => {
+                unimplemented!()
+            },
+            plan::Instruction::Perform(
+                plan::Perform {
+                    op: plan::Op::Block(plan::PerformBlock { op: plan::BlockOp::Finish, level_index, block_index, }),
+                    next,
+                }
+            ) => {
+                unimplemented!()
+            },
+            plan::Instruction::Done => {
+                unimplemented!()
+            },
+        }
     }
 }
 
-// pub fn fold_levels<'s, B, S>(sketch: &'s sketch::Tree) -> FoldLevels<'s, B, S> {
-//     FoldLevels {
-//         plan: plan::build(sketch),
-//         levels: sketch
-//             .levels()
-//             .iter()
-//             .map(|level| Level {
-//                 level,
-//                 state: Some(LevelState::Init),
-//             })
-//             .collect(),
-//     }
-// }
+pub struct VisitLevel<S> {
+    pub level_index: usize,
+    pub next: VisitLevelNext<S>,
+}
 
-// pub struct FoldLevels<'s, B, S> {
-//     plan: plan::Plan<'s>,
-//     levels: Vec<Level<'s, B, S>>,
-// }
+pub struct VisitLevelNext<S> {
+    level_index: usize,
+    busy: Busy<S>,
+}
 
-// struct Level<'s, B, S> {
-//     level: &'s sketch::Level,
-//     state: Option<LevelState<B, S>>,
-// }
+impl<S> VisitLevelNext<S> {
+    pub fn level_ready(self, level_seed: S, op: plan::Instruction, _sketch: &sketch::Tree) -> Result<Instruction<S>, Error> {
+        Ok(Instruction::Perform(Perform {
+            op: Op::VisitBlockStart(VisitBlockStart {
+                level_index: self.level_index,
+                level_seed,
+                block_index: 0,
+                next: VisitBlockStartNext {
+                    busy: self.busy,
+                    level_index: self.level_index,
+                    block_index: 0,
+                },
+            }),
+            next_plan: op,
+        }))
+    }
+}
 
-// enum LevelState<B, S> {
-//     Init,
-//     Active {
-//         level_seed: S,
-//         block: B,
-//         block_index: usize,
-//     },
-//     Flushed {
-//         level_seed: S,
-//     },
-// }
+pub struct VisitBlockStart<S> {
+    pub level_index: usize,
+    pub level_seed: S,
+    pub block_index: usize,
+    pub next: VisitBlockStartNext<S>,
+}
+
+pub struct VisitBlockStartNext<S> {
+    busy: Busy<S>,
+    level_index: usize,
+    block_index: usize,
+}
+
+impl<S> VisitBlockStartNext<S> {
+    pub fn block_ready(mut self, level_seed: S, op: plan::Instruction, sketch: &sketch::Tree) -> Result<Instruction<S>, Error> {
+        let state = &mut self.busy.levels[self.level_index];
+        assert!(state.is_none());
+        *state = Some(LevelState::Active {
+            level_seed,
+            block_index: self.block_index,
+        });
+        Script {
+            inner: Fsm::Busy(self.busy),
+        }.step(op, sketch)
+    }
+}
+
 
 // impl<'s, B, S> FoldLevels<'s, B, S> {
 //     pub fn next(mut self) -> Instruction<'s, B, S> {
@@ -212,56 +316,6 @@ impl<S> Busy<S> {
 //     VisitBlockFinish(VisitBlockFinish<'s, B, S>),
 // }
 
-// pub struct VisitLevel<'s, B, S> {
-//     pub level: &'s sketch::Level,
-//     pub next: VisitLevelNext<'s, B, S>,
-// }
-
-// pub struct VisitLevelNext<'s, B, S> {
-//     fold_levels: FoldLevels<'s, B, S>,
-//     level: &'s sketch::Level,
-// }
-
-// impl<'s, B, S> VisitLevelNext<'s, B, S> {
-//     pub fn level_ready(self, level_seed: S) -> VisitBlockStart<'s, B, S> {
-//         VisitBlockStart {
-//             level: self.level,
-//             level_seed,
-//             block_index: 0,
-//             next: VisitBlockStartNext {
-//                 fold_levels: self.fold_levels,
-//                 level: self.level,
-//                 block_index: 0,
-//             },
-//         }
-//     }
-// }
-
-// pub struct VisitBlockStart<'s, B, S> {
-//     pub level: &'s sketch::Level,
-//     pub level_seed: S,
-//     pub block_index: usize,
-//     pub next: VisitBlockStartNext<'s, B, S>,
-// }
-
-// pub struct VisitBlockStartNext<'s, B, S> {
-//     fold_levels: FoldLevels<'s, B, S>,
-//     level: &'s sketch::Level,
-//     block_index: usize,
-// }
-
-// impl<'s, B, S> VisitBlockStartNext<'s, B, S> {
-//     pub fn block_ready(mut self, block: B, level_seed: S) -> FoldLevels<'s, B, S> {
-//         let state = &mut self.fold_levels.levels[self.level.index].state;
-//         assert!(state.is_none());
-//         *state = Some(LevelState::Active {
-//             level_seed,
-//             block,
-//             block_index: self.block_index,
-//         });
-//         self.fold_levels
-//     }
-// }
 
 // pub struct VisitItem<'s, B, S> {
 //     pub level: &'s sketch::Level,
