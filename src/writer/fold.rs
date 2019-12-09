@@ -70,31 +70,36 @@ enum LevelState<S> {
     },
 }
 
+pub struct StepArg<'s> {
+    pub op: plan::Instruction,
+    pub sketch: &'s sketch::Tree,
+}
+
 
 impl<S> Script<S> {
     pub fn start() -> Script<S> {
         Script { inner: Fsm::Init, }
     }
 
-    pub fn step(self, op: plan::Instruction, sketch: &sketch::Tree) -> Result<Instruction<S>, Error> {
+    pub fn step<'s>(self, arg: StepArg<'s>) -> Result<Instruction<S>, Error> {
         match self.inner {
             Fsm::Init =>
                 Busy {
-                    levels: sketch
+                    levels: arg.sketch
                         .levels()
                         .iter()
                         .map(|_level| Some(LevelState::Init))
                         .collect(),
-                }.step(op, sketch),
+                }.step(arg),
             Fsm::Busy(busy) =>
-                busy.step(op, sketch),
+                busy.step(arg),
         }
     }
 }
 
 impl<S> Busy<S> {
-    fn step(mut self, op: plan::Instruction, sketch: &sketch::Tree) -> Result<Instruction<S>, Error> {
-        match op {
+    fn step<'s>(mut self, arg: StepArg<'s>) -> Result<Instruction<S>, Error> {
+        match arg.op {
             plan::Instruction::Perform(
                 plan::Perform { op: plan::Op::BlockStart, level_index, block_index, next, }
             ) if level_index < self.levels.len() =>
@@ -107,7 +112,7 @@ impl<S> Busy<S> {
                                 level_index,
                                 next: VisitLevelNext { level_index, busy: self, },
                             }),
-                            next_plan: next.step(sketch),
+                            next_plan: next.step(arg.sketch),
                         })),
                     Some(LevelState::Init) =>
                         Err(Error::UnexpectedNonZeroBlockIndexForLevelStateInit),
@@ -129,7 +134,7 @@ impl<S> Busy<S> {
                                     block_index,
                                 },
                             }),
-                            next_plan: next.step(sketch),
+                            next_plan: next.step(arg.sketch),
                         })),
                     Some(LevelState::Flushed { .. }) =>
                         Err(Error::UnexpectedZeroBlockIndexForLevelStateFlushed),
@@ -160,7 +165,7 @@ impl<S> Busy<S> {
                                     block_index,
                                 },
                             }),
-                            next_plan: next.step(sketch),
+                            next_plan: next.step(arg.sketch),
                         })),
                     Some(LevelState::Active { block_index: active_block_index, .. }) =>
                         Err(Error::WritingItemInWrongBlock { active_block_index, block_index, }),
@@ -189,7 +194,7 @@ impl<S> Busy<S> {
                                     level_index,
                                 },
                             }),
-                            next_plan: next.step(sketch),
+                            next_plan: next.step(arg.sketch),
                         })),
                     Some(LevelState::Active { block_index: active_block_index, .. }) =>
                         Err(Error::FinishingTheWrongBlock { active_block_index, block_index, }),
@@ -217,7 +222,7 @@ pub struct VisitLevelNext<S> {
 }
 
 impl<S> VisitLevelNext<S> {
-    pub fn level_ready(self, level_seed: S, op: plan::Instruction, _sketch: &sketch::Tree) -> Result<Instruction<S>, Error> {
+    pub fn level_ready<'s>(self, level_seed: S, arg: StepArg<'s>) -> Result<Instruction<S>, Error> {
         Ok(Instruction::Perform(Perform {
             op: Op::VisitBlockStart(VisitBlockStart {
                 level_index: self.level_index,
@@ -229,7 +234,7 @@ impl<S> VisitLevelNext<S> {
                     block_index: 0,
                 },
             }),
-            next_plan: op,
+            next_plan: arg.op,
         }))
     }
 }
@@ -249,7 +254,7 @@ pub struct VisitBlockStartNext<S> {
 }
 
 impl<S> VisitBlockStartNext<S> {
-    pub fn block_ready(mut self, level_seed: S, op: plan::Instruction, sketch: &sketch::Tree) -> Result<Instruction<S>, Error> {
+    pub fn block_ready<'s>(mut self, level_seed: S, arg: StepArg<'s>) -> Result<Instruction<S>, Error> {
         let state = &mut self.busy.levels[self.level_index];
         assert!(state.is_none());
         *state = Some(LevelState::Active {
@@ -258,7 +263,7 @@ impl<S> VisitBlockStartNext<S> {
         });
         Script {
             inner: Fsm::Busy(self.busy),
-        }.step(op, sketch)
+        }.step(arg)
     }
 }
 
@@ -278,7 +283,7 @@ pub struct VisitItemNext<S> {
 }
 
 impl<S> VisitItemNext<S> {
-    pub fn item_ready(mut self, level_seed: S, op: plan::Instruction, sketch: &sketch::Tree) -> Result<Instruction<S>, Error> {
+    pub fn item_ready<'s>(mut self, level_seed: S, arg: StepArg<'s>) -> Result<Instruction<S>, Error> {
         let state = &mut self.busy.levels[self.level_index];
         assert!(state.is_none());
         *state = Some(LevelState::Active {
@@ -287,7 +292,7 @@ impl<S> VisitItemNext<S> {
         });
         Script {
             inner: Fsm::Busy(self.busy),
-        }.step(op, sketch)
+        }.step(arg)
     }
 }
 
@@ -305,13 +310,13 @@ pub struct VisitBlockFinishNext<S> {
 }
 
 impl<S> VisitBlockFinishNext<S> {
-    pub fn block_flushed(mut self, level_seed: S, op: plan::Instruction, sketch: &sketch::Tree) -> Result<Instruction<S>, Error> {
+    pub fn block_flushed<'s>(mut self, level_seed: S, arg: StepArg<'s>) -> Result<Instruction<S>, Error> {
         let state = &mut self.busy.levels[self.level_index];
         assert!(state.is_none());
         *state = Some(LevelState::Flushed { level_seed, });
         Script {
             inner: Fsm::Busy(self.busy),
-        }.step(op, sketch)
+        }.step(arg)
     }
 }
 

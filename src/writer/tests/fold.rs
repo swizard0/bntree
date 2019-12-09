@@ -20,17 +20,17 @@ fn interpret_fold_count_items(sketch: &sketch::Tree) -> Vec<(usize, usize)> {
     let plan_op = plan::Script::start()
         .step(sketch);
     let mut fold_op = fold::Script::start()
-        .step(plan_op, sketch).unwrap();
+        .step(fold::StepArg { op: plan_op, sketch, }).unwrap();
     loop {
         match fold_op {
             fold::Instruction::Perform(fold::Perform { op: fold::Op::VisitLevel(fold::VisitLevel { next, .. }), next_plan, }) =>
-                fold_op = next.level_ready(0, next_plan, sketch).unwrap(),
+                fold_op = next.level_ready(0, fold::StepArg { op: next_plan, sketch, }).unwrap(),
             fold::Instruction::Perform(fold::Perform { op: fold::Op::VisitBlockStart(fold::VisitBlockStart { level_seed, next, .. }), next_plan, }) =>
-                fold_op = next.block_ready(level_seed, next_plan, sketch).unwrap(),
+                fold_op = next.block_ready(level_seed, fold::StepArg { op: next_plan, sketch, }).unwrap(),
             fold::Instruction::Perform(fold::Perform { op: fold::Op::VisitItem(fold::VisitItem { level_seed, next, .. }), next_plan, }) =>
-                fold_op = next.item_ready(level_seed + 1, next_plan, sketch).unwrap(),
+                fold_op = next.item_ready(level_seed + 1, fold::StepArg { op: next_plan, sketch, }).unwrap(),
             fold::Instruction::Perform(fold::Perform { op: fold::Op::VisitBlockFinish(fold::VisitBlockFinish { level_seed, next, .. }), next_plan, }) =>
-                fold_op = next.block_flushed(level_seed, next_plan, sketch).unwrap(),
+                fold_op = next.block_flushed(level_seed, fold::StepArg { op: next_plan, sketch, }).unwrap(),
             fold::Instruction::Done(done) =>
                 return done.levels_iter().collect(),
         }

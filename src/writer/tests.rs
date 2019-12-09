@@ -149,28 +149,6 @@ pub mod fold;
 //     ]);
 // }
 
-// fn fold_identity<'s>(sketch: &'s sketch::Tree) -> Vec<(&'s sketch::Level, (usize, usize))> {
-//     struct Block;
-//     let mut fold = fold::fold_levels(sketch);
-//     loop {
-//         fold = match fold.next() {
-//             fold::Instruction::Done(done) =>
-//                 return done.levels_iter().map(|value| (value.0, value.1.clone())).collect(),
-//             fold::Instruction::VisitLevel(fold::VisitLevel { next, .. }) => {
-//                 let fold::VisitBlockStart { level_seed, next, .. } =
-//                     next.level_ready((0, 0));
-//                 next.block_ready(Block, level_seed)
-//             },
-//             fold::Instruction::VisitBlockStart(fold::VisitBlockStart { level_seed, next, .. }) =>
-//                 next.block_ready(Block, level_seed),
-//             fold::Instruction::VisitItem(fold::VisitItem { level_seed: (items, blocks), block: Block, next, .. }) =>
-//                 next.item_ready(Block, (items + 1, blocks)),
-//             fold::Instruction::VisitBlockFinish(fold::VisitBlockFinish { level_seed: (items, blocks), block: Block, next, .. }) =>
-//                 next.block_flushed((items, blocks + 1)),
-//         }
-//     }
-// }
-
 // #[derive(Clone, Copy, PartialEq, Debug)]
 // struct AllocBlock {
 //     index: usize,
