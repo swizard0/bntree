@@ -1,3 +1,5 @@
+use std::ops::Add;
+
 use super::{
     fold,
     super::sketch,
@@ -21,6 +23,7 @@ pub struct PassWrite<BW, O> {
 
 pub enum OpMarkup<O> {
     InitialLevelSize(InitialLevelSize<O>),
+    AllocMarkupBlock(AllocMarkupBlock<O>),
 }
 
 pub enum OpWrite<O> {
@@ -33,6 +36,8 @@ pub enum Error {
     InvalidMarkupArgForWriteMode,
     InvalidArgOpCombinationForLevelHeaderSize,
     LevelHeaderSize(fold::Error),
+    InvalidArgOpCombinationForBlockReady,
+    BlockReady(fold::Error),
 }
 
 pub struct Script<O> {
@@ -120,21 +125,21 @@ impl<O> BusyMarkup<O> {
                     }),
                     next_fold: op,
                 })),
-            fold::Instruction::Perform(fold::Perform {
-                op: fold::Op::VisitBlockStart(fold::VisitBlockStart { level_index, level_seed, next, .. }),
-                next_plan,
-            }) =>
-                unimplemented!(),
-//                     Instruction::AllocMarkupBlock(AllocMarkupBlock {
-//                         level,
-//                         next: AllocMarkupBlockNext {
-//                             fold_levels_next: next,
-//                             tree_coords: self.coords,
-//                             child_pending: markup.child_pending,
-//                             level_seed,
-//                             _marker: PhantomData,
-//                         },
-//                     }),
+            fold::Instruction::Perform(
+                fold::Perform { op: fold::Op::VisitBlockStart(fold::VisitBlockStart { level_index, block_index, .. }), .. }
+            ) =>
+                Ok(Instruction::PassMarkup(PassMarkup {
+                    op: OpMarkup::AllocMarkupBlock(AllocMarkupBlock {
+                        level_index,
+                        block_index,
+                        next: AllocMarkupBlockNext {
+                            level_index,
+                            block_index,
+                            busy: self,
+                        },
+                    }),
+                    next_fold: op,
+                })),
             fold::Instruction::Perform(fold::Perform {
                 op: fold::Op::VisitItem(fold::VisitItem { level_index, level_seed, next, .. }),
                 next_plan,
@@ -236,6 +241,7 @@ impl<O> InitialLevelSizeNext<O> {
             }),
             sketch,
         } = arg {
+
             let fold_op = next.level_ready(
                 MarkupLevelSeed {
                     level_size: level_header_size.clone(),
@@ -244,26 +250,52 @@ impl<O> InitialLevelSizeNext<O> {
                 },
                 fold::StepArg { op: next_plan, sketch, },
             ).map_err(Error::LevelHeaderSize)?;
-
-//         let fold::VisitBlockStart { level, level_seed, next: fold_levels_next, .. } =
-//             self.fold_levels_next.level_ready(MarkupLevelSeed {
-//                 level_size: level_header_size.clone(),
-//                 level_header_size,
-//             });
-//         AllocMarkupBlock {
-//             level,
-//             next: AllocMarkupBlockNext {
-//                 fold_levels_next,
-//                 tree_coords: self.tree_coords,
-//                 child_pending: self.child_pending,
-//                 level_seed,
-//                 _marker: PhantomData,
-//             },
-//         }
-
-            unimplemented!()
+            self.busy.step(fold_op, sketch)
         } else {
             Err(Error::InvalidArgOpCombinationForLevelHeaderSize)
+        }
+    }
+}
+
+
+pub struct AllocMarkupBlock<O> {
+    pub level_index: usize,
+    pub block_index: usize,
+    pub next: AllocMarkupBlockNext<O>,
+}
+
+pub struct AllocMarkupBlockNext<O> {
+    busy: BusyMarkup<O>,
+    level_index: usize,
+    block_index: usize,
+}
+
+impl<O> AllocMarkupBlockNext<O> {
+    pub fn block_ready<'s, BA, BW>(
+        self,
+        block: BA,
+        arg: StepArg<'s, BA, BW, O>,
+    )
+        -> Result<Instruction<BA, BW, O>, Error>
+    where O: Add<Output = O>
+    {
+        if let StepArg::Markup {
+            op: fold::Instruction::Perform(fold::Perform {
+                op: fold::Op::VisitBlockStart(fold::VisitBlockStart { level_index, block_index, level_seed, next, }),
+                next_plan,
+            }),
+            sketch,
+        } = arg {
+            let fold_op = next.block_ready(
+                MarkupLevelSeed {
+                    active_block: Some(block),
+                    ..level_seed
+                },
+                fold::StepArg { op: next_plan, sketch, },
+            ).map_err(Error::BlockReady)?;
+            self.busy.step(fold_op, sketch)
+        } else {
+            Err(Error::InvalidArgOpCombinationForBlockReady)
         }
     }
 }
