@@ -21,7 +21,8 @@ pub mod markup {
 
     pub enum Op<B, O> {
         InitialLevelSize(InitialLevelSize),
-        AllocMarkupBlock(AllocMarkupBlock<B, O>),
+        AllocBlock(AllocBlock<B, O>),
+        WriteItem(WriteItem<B, O>),
     }
 
     pub struct Continue<B, O> {
@@ -33,6 +34,8 @@ pub mod markup {
     pub enum Error {
         LevelHeaderSize(fold::Error),
         BlockReady(fold::Error),
+        WriteItem(fold::Error),
+        NoActiveBlockWhileWriteItem,
     }
 
     pub struct Context<B, O> {
@@ -67,52 +70,45 @@ pub mod markup {
             Script(())
         }
 
-        pub fn step<'s, B, O>(
-            self,
-            context: &mut Context<B, O>,
-            op: fold::Instruction<LevelSeed<B, O>>,
-            sketch: &'s sketch::Tree,
-        )
-            -> Result<Instruction<B, O>, Error>
-        {
+        pub fn step<'s, B, O>(self, context: &mut Context<B, O>, op: fold::Instruction<LevelSeed<B, O>>) -> Result<Instruction<B, O>, Error> {
             match op {
                 fold::Instruction::Op(fold::Op::VisitLevel(fold::VisitLevel { level_index, next, })) =>
                     Ok(Instruction::Op(Op::InitialLevelSize(InitialLevelSize {
                         level_index,
                         next: InitialLevelSizeNext {
-                            level_index,
                             script: self,
                             fold_next: next,
                         },
                     }))),
                 fold::Instruction::Op(fold::Op::VisitBlockStart(fold::VisitBlockStart { level_index, level_seed, block_index, next, })) =>
-                    Ok(Instruction::Op(Op::AllocMarkupBlock(AllocMarkupBlock {
+                    Ok(Instruction::Op(Op::AllocBlock(AllocBlock {
                         level_index,
                         block_index,
-                        next: AllocMarkupBlockNext {
-                            level_index,
+                        next: AllocBlockNext {
                             level_seed,
-                            block_index,
                             script: self,
                             fold_next: next,
                         },
                     }))),
                 fold::Instruction::Op(fold::Op::VisitItem(fold::VisitItem {
-                    level_index, level_seed, block_index, block_item_index, next,
+                    level_index, mut level_seed, block_index, block_item_index, next,
                 })) =>
-                    unimplemented!(),
-                //                     Instruction::WriteMarkupItem(WriteMarkupItem {
-                //                         level,
-                //                         block,
-                //                         child_pending: markup.child_pending,
-                //                         next: WriteMarkupItemNext {
-                //                             fold_levels_next: next,
-                //                             tree_coords: self.coords,
-                //                             level_seed,
-                //                             _marker: PhantomData,
-                //                         },
-                //                     }),
-
+                    if let Some(block) = level_seed.active_block.take() {
+                        Ok(Instruction::Op(Op::WriteItem(WriteItem {
+                            level_index,
+                            block_index,
+                            block_item_index,
+                            block,
+                            child_pending: context.child_pending,
+                            next: WriteItemNext {
+                                level_seed,
+                                script: self,
+                                fold_next: next,
+                            },
+                        })))
+                    } else {
+                        Err(Error::NoActiveBlockWhileWriteItem)
+                    },
                 fold::Instruction::Op(fold::Op::VisitBlockFinish(fold::VisitBlockFinish {
                     level_index, level_seed, block_index, next,
                 })) =>
@@ -176,7 +172,6 @@ pub mod markup {
     }
 
     pub struct InitialLevelSizeNext {
-        level_index: usize,
         script: Script,
         fold_next: fold::VisitLevelNext,
     }
@@ -207,21 +202,19 @@ pub mod markup {
     }
 
 
-    pub struct AllocMarkupBlock<B, O> {
+    pub struct AllocBlock<B, O> {
         pub level_index: usize,
         pub block_index: usize,
-        pub next: AllocMarkupBlockNext<B, O>,
+        pub next: AllocBlockNext<B, O>,
     }
 
-    pub struct AllocMarkupBlockNext<B, O> {
-        level_index: usize,
+    pub struct AllocBlockNext<B, O> {
         level_seed: LevelSeed<B, O>,
-        block_index: usize,
         script: Script,
         fold_next: fold::VisitBlockStartNext,
     }
 
-    impl<B, O> AllocMarkupBlockNext<B, O> {
+    impl<B, O> AllocBlockNext<B, O> {
         pub fn block_ready<'s>(
             self,
             block: B,
@@ -242,6 +235,46 @@ pub mod markup {
                 ).map_err(Error::LevelHeaderSize)?;
             let fold_op = next.step(&mut context.fold_ctx, plan_op, sketch)
                 .map_err(Error::LevelHeaderSize)?;
+            Ok(Continue { fold_op, next: self.script, })
+        }
+    }
+
+
+    pub struct WriteItem<B, O> {
+        pub level_index: usize,
+        pub block_index: usize,
+        pub block_item_index: usize,
+        pub block: B,
+        pub child_pending: bool,
+        pub next: WriteItemNext<B, O>,
+    }
+
+    pub struct WriteItemNext<B, O> {
+        level_seed: LevelSeed<B, O>,
+        script: Script,
+        fold_next: fold::VisitItemNext,
+    }
+
+    impl<B, O> WriteItemNext<B, O> {
+        pub fn item_written<'s>(
+            self,
+            block: B,
+            context: &mut Context<B, O>,
+            sketch: &'s sketch::Tree,
+        )
+            -> Result<Continue<B, O>, Error>
+        {
+            let fold::Continue { plan_op, next, } =
+                self.fold_next.item_ready(
+                    LevelSeed {
+                        active_block: Some(block),
+                        ..self.level_seed
+                    },
+                    &mut context.fold_ctx,
+                    sketch,
+                ).map_err(Error::WriteItem)?;
+            let fold_op = next.step(&mut context.fold_ctx, plan_op, sketch)
+                .map_err(Error::WriteItem)?;
             Ok(Continue { fold_op, next: self.script, })
         }
     }
