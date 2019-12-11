@@ -5,7 +5,7 @@ use super::{
 
 pub enum Instruction<S> {
     Perform(Perform<S>),
-    Done(Done<S>),
+    Done,
 }
 
 pub struct Perform<S> {
@@ -14,7 +14,7 @@ pub struct Perform<S> {
 }
 
 pub enum Op<S> {
-    VisitLevel(VisitLevel<S>),
+    VisitLevel(VisitLevel),
     VisitBlockStart(VisitBlockStart<S>),
     VisitItem(VisitItem<S>),
     VisitBlockFinish(VisitBlockFinish<S>),
@@ -22,6 +22,9 @@ pub enum Op<S> {
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Error {
+    InvalidLevelStateForBlockStart,
+    InvalidLevelStateForWriteItem,
+    InvalidLevelStateForBlockFinish,
     InvalidPlanBlockStartLevelIndex,
     UnexpectedNonZeroBlockIndexForLevelStateInit,
     UnexpectedLevelStateActiveForPlanBlockStart {
@@ -44,18 +47,31 @@ pub enum Error {
         active_block_index: usize,
     },
     FinishingBlockAfterBlockFlush,
+    InvalidLevelIndexForVisitBlockStart {
+        level_index: usize,
+    },
+    AlreadyInitializedLevelForVisitBlockStart,
+    InvalidLevelIndexForVisitItem {
+        level_index: usize,
+    },
+    AlreadyInitializedLevelForVisitItem,
+    InvalidLevelIndexForVisitBlockFinish {
+        level_index: usize,
+    },
+    AlreadyInitializedLevelForVisitBlockFinish,
 }
 
-pub struct Script<S> {
-    inner: Fsm<S>,
+pub struct Script {
+    inner: Fsm,
 }
 
-enum Fsm<S> {
+enum Fsm {
     Init,
-    Busy(Busy<S>),
+    Busy,
 }
 
-struct Busy<S> {
+#[derive(Default)]
+pub struct Context<S> {
     levels: Vec<Option<LevelState<S>>>,
 }
 
@@ -76,41 +92,35 @@ pub struct StepArg<'s> {
 }
 
 
-impl<S> Script<S> {
-    pub fn start() -> Script<S> {
+impl Script {
+    pub fn new() -> Script {
         Script { inner: Fsm::Init, }
     }
 
-    pub fn step<'s>(self, arg: StepArg<'s>) -> Result<Instruction<S>, Error> {
-        match self.inner {
-            Fsm::Init =>
-                Busy {
-                    levels: arg.sketch
-                        .levels()
-                        .iter()
-                        .map(|_level| Some(LevelState::Init))
-                        .collect(),
-                }.step(arg),
-            Fsm::Busy(busy) =>
-                busy.step(arg),
+    pub fn step<'s, S>(mut self, context: &mut Context<S>, arg: StepArg<'s>) -> Result<Instruction<S>, Error> {
+        if let Fsm::Init = self.inner {
+            context.levels.clear();
+            context.levels.extend(
+                arg.sketch
+                    .levels()
+                    .iter()
+                    .map(|_level| Some(LevelState::Init))
+            );
+            self.inner = Fsm::Busy;
         }
-    }
-}
 
-impl<S> Busy<S> {
-    fn step<'s>(mut self, arg: StepArg<'s>) -> Result<Instruction<S>, Error> {
         match arg.op {
             plan::Instruction::Perform(
                 plan::Perform { op: plan::Op::BlockStart, level_index, block_index, next, }
-            ) if level_index < self.levels.len() =>
-                match self.levels[level_index].take() {
+            ) if level_index < context.levels.len() =>
+                match context.levels[level_index].take() {
                     None =>
-                        panic!("level state left in invalid state for BlockStart"),
+                        Err(Error::InvalidLevelStateForBlockStart),
                     Some(LevelState::Init) if block_index == 0 =>
                         Ok(Instruction::Perform(Perform {
                             op: Op::VisitLevel(VisitLevel {
                                 level_index,
-                                next: VisitLevelNext { level_index, busy: self, },
+                                next: VisitLevelNext { level_index, script: self, },
                             }),
                             next_plan: next.step(arg.sketch),
                         })),
@@ -129,7 +139,7 @@ impl<S> Busy<S> {
                                 level_seed,
                                 block_index,
                                 next: VisitBlockStartNext {
-                                    busy: self,
+                                    script: self,
                                     level_index,
                                     block_index,
                                 },
@@ -146,10 +156,10 @@ impl<S> Busy<S> {
                 plan::Perform {
                     op: plan::Op::BlockItem { index: item_index, }, level_index, block_index, next,
                 },
-            ) if level_index < self.levels.len() =>
-                match self.levels[level_index].take() {
+            ) if level_index < context.levels.len() =>
+                match context.levels[level_index].take() {
                     None =>
-                        panic!("level state left in invalid state for WriteItem"),
+                        Err(Error::InvalidLevelStateForWriteItem),
                     Some(LevelState::Init) =>
                         Err(Error::WritingItemBeforeBlockInitialize),
                     Some(LevelState::Active { level_seed, block_index: active_block_index, }) if active_block_index == block_index =>
@@ -160,7 +170,7 @@ impl<S> Busy<S> {
                                 block_index,
                                 block_item_index: item_index,
                                 next: VisitItemNext {
-                                    busy: self,
+                                    script: self,
                                     level_index,
                                     block_index,
                                 },
@@ -177,10 +187,10 @@ impl<S> Busy<S> {
 
             plan::Instruction::Perform(
                 plan::Perform { op: plan::Op::BlockFinish, level_index, block_index, next, }
-            ) if level_index < self.levels.len() =>
-                match self.levels[level_index].take() {
+            ) if level_index < context.levels.len() =>
+                match context.levels[level_index].take() {
                     None =>
-                        panic!("level state left in invalid state for BlockFinish"),
+                        Err(Error::InvalidLevelStateForBlockFinish),
                     Some(LevelState::Init) =>
                         Err(Error::FinishingBlockBeforeBlockInitialize),
                     Some(LevelState::Active { level_seed, block_index: active_block_index, }) if active_block_index == block_index =>
@@ -190,7 +200,7 @@ impl<S> Busy<S> {
                                 level_seed,
                                 block_index,
                                 next: VisitBlockFinishNext {
-                                    busy: self,
+                                    script: self,
                                     level_index,
                                 },
                             }),
@@ -205,31 +215,31 @@ impl<S> Busy<S> {
                 Err(Error::InvalidPlanBlockFinisLevelIndex),
 
             plan::Instruction::Done =>
-                Ok(Instruction::Done(Done { busy: self, })),
+                Ok(Instruction::Done),
         }
     }
 }
 
 
-pub struct VisitLevel<S> {
+pub struct VisitLevel {
     pub level_index: usize,
-    pub next: VisitLevelNext<S>,
+    pub next: VisitLevelNext,
 }
 
-pub struct VisitLevelNext<S> {
+pub struct VisitLevelNext {
     level_index: usize,
-    busy: Busy<S>,
+    script: Script,
 }
 
-impl<S> VisitLevelNext<S> {
-    pub fn level_ready<'s>(self, level_seed: S, arg: StepArg<'s>) -> Result<Instruction<S>, Error> {
+impl VisitLevelNext {
+    pub fn level_ready<'s, S>(self, level_seed: S, _context: &mut Context<S>, arg: StepArg<'s>) -> Result<Instruction<S>, Error> {
         Ok(Instruction::Perform(Perform {
             op: Op::VisitBlockStart(VisitBlockStart {
                 level_index: self.level_index,
                 level_seed,
                 block_index: 0,
                 next: VisitBlockStartNext {
-                    busy: self.busy,
+                    script: self.script,
                     level_index: self.level_index,
                     block_index: 0,
                 },
@@ -244,26 +254,27 @@ pub struct VisitBlockStart<S> {
     pub level_index: usize,
     pub level_seed: S,
     pub block_index: usize,
-    pub next: VisitBlockStartNext<S>,
+    pub next: VisitBlockStartNext,
 }
 
-pub struct VisitBlockStartNext<S> {
-    busy: Busy<S>,
+pub struct VisitBlockStartNext {
+    script: Script,
     level_index: usize,
     block_index: usize,
 }
 
-impl<S> VisitBlockStartNext<S> {
-    pub fn block_ready<'s>(mut self, level_seed: S, arg: StepArg<'s>) -> Result<Instruction<S>, Error> {
-        let state = &mut self.busy.levels[self.level_index];
-        assert!(state.is_none());
+impl VisitBlockStartNext {
+    pub fn block_ready<'s, S>(self, level_seed: S, context: &mut Context<S>, arg: StepArg<'s>) -> Result<Instruction<S>, Error> {
+        let state = context.levels.get_mut(self.level_index)
+            .ok_or(Error::InvalidLevelIndexForVisitBlockStart { level_index: self.level_index, })?;
+        if state.is_some() {
+            return Err(Error::AlreadyInitializedLevelForVisitBlockStart);
+        }
         *state = Some(LevelState::Active {
             level_seed,
             block_index: self.block_index,
         });
-        Script {
-            inner: Fsm::Busy(self.busy),
-        }.step(arg)
+        self.script.step(context, arg)
     }
 }
 
@@ -273,26 +284,27 @@ pub struct VisitItem<S> {
     pub level_seed: S,
     pub block_index: usize,
     pub block_item_index: usize,
-    pub next: VisitItemNext<S>,
+    pub next: VisitItemNext,
 }
 
-pub struct VisitItemNext<S> {
-    busy: Busy<S>,
+pub struct VisitItemNext {
+    script: Script,
     level_index: usize,
     block_index: usize,
 }
 
-impl<S> VisitItemNext<S> {
-    pub fn item_ready<'s>(mut self, level_seed: S, arg: StepArg<'s>) -> Result<Instruction<S>, Error> {
-        let state = &mut self.busy.levels[self.level_index];
-        assert!(state.is_none());
+impl VisitItemNext {
+    pub fn item_ready<'s, S>(self, level_seed: S, context: &mut Context<S>, arg: StepArg<'s>) -> Result<Instruction<S>, Error> {
+        let state = context.levels.get_mut(self.level_index)
+            .ok_or(Error::InvalidLevelIndexForVisitItem { level_index: self.level_index, })?;
+        if state.is_some() {
+            return Err(Error::AlreadyInitializedLevelForVisitItem);
+        }
         *state = Some(LevelState::Active {
             level_seed,
             block_index: self.block_index,
         });
-        Script {
-            inner: Fsm::Busy(self.busy),
-        }.step(arg)
+        self.script.step(context, arg)
     }
 }
 
@@ -301,42 +313,38 @@ pub struct VisitBlockFinish<S> {
     pub level_index: usize,
     pub level_seed: S,
     pub block_index: usize,
-    pub next: VisitBlockFinishNext<S>,
+    pub next: VisitBlockFinishNext,
 }
 
-pub struct VisitBlockFinishNext<S> {
-    busy: Busy<S>,
+pub struct VisitBlockFinishNext {
+    script: Script,
     level_index: usize,
 }
 
-impl<S> VisitBlockFinishNext<S> {
-    pub fn block_flushed<'s>(mut self, level_seed: S, arg: StepArg<'s>) -> Result<Instruction<S>, Error> {
-        let state = &mut self.busy.levels[self.level_index];
-        assert!(state.is_none());
+impl VisitBlockFinishNext {
+    pub fn block_flushed<'s, S>(self, level_seed: S, context: &mut Context<S>, arg: StepArg<'s>) -> Result<Instruction<S>, Error> {
+        let state = context.levels.get_mut(self.level_index)
+            .ok_or(Error::InvalidLevelIndexForVisitBlockFinish { level_index: self.level_index, })?;
+        if state.is_some() {
+            return Err(Error::AlreadyInitializedLevelForVisitBlockFinish);
+        }
         *state = Some(LevelState::Flushed { level_seed, });
-        Script {
-            inner: Fsm::Busy(self.busy),
-        }.step(arg)
+        self.script.step(context, arg)
     }
 }
 
 
-pub struct Done<S> {
-    busy: Busy<S>,
-}
-
-impl<S> Done<S> {
+impl<S> Context<S> {
     pub fn levels_iter(self) -> impl Iterator<Item = (usize, S)> {
-        self.busy
-            .levels
+        self.levels
             .into_iter()
-            .filter_map(|fold_level| {
+            .enumerate()
+            .filter_map(|(level_index, fold_level)| {
                 if let Some(LevelState::Flushed { level_seed, }) = fold_level {
-                    Some(level_seed)
+                    Some((level_index, level_seed))
                 } else {
                     None
                 }
             })
-            .enumerate()
     }
 }

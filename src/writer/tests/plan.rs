@@ -89,7 +89,7 @@ enum Instruction {
 fn interpret_script(sketch: &sketch::Tree, mut script: Vec<Instruction>) {
     script.reverse();
 
-    let mut instr = plan::Script::start()
+    let mut instr = plan::Script::new()
         .step(sketch);
     assert_eq!(script.pop(), Some(Instruction::TreeStart));
 

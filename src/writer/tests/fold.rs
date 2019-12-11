@@ -17,22 +17,23 @@ fn tree17_3() {
 }
 
 fn interpret_fold_count_items(sketch: &sketch::Tree) -> Vec<(usize, usize)> {
-    let plan_op = plan::Script::start()
+    let mut fold_ctx = Default::default();
+    let plan_op = plan::Script::new()
         .step(sketch);
-    let mut fold_op = fold::Script::start()
-        .step(fold::StepArg { op: plan_op, sketch, }).unwrap();
+    let mut fold_op = fold::Script::new()
+        .step(&mut fold_ctx, fold::StepArg { op: plan_op, sketch, }).unwrap();
     loop {
         match fold_op {
             fold::Instruction::Perform(fold::Perform { op: fold::Op::VisitLevel(fold::VisitLevel { next, .. }), next_plan, }) =>
-                fold_op = next.level_ready(0, fold::StepArg { op: next_plan, sketch, }).unwrap(),
+                fold_op = next.level_ready(0, &mut fold_ctx, fold::StepArg { op: next_plan, sketch, }).unwrap(),
             fold::Instruction::Perform(fold::Perform { op: fold::Op::VisitBlockStart(fold::VisitBlockStart { level_seed, next, .. }), next_plan, }) =>
-                fold_op = next.block_ready(level_seed, fold::StepArg { op: next_plan, sketch, }).unwrap(),
+                fold_op = next.block_ready(level_seed, &mut fold_ctx, fold::StepArg { op: next_plan, sketch, }).unwrap(),
             fold::Instruction::Perform(fold::Perform { op: fold::Op::VisitItem(fold::VisitItem { level_seed, next, .. }), next_plan, }) =>
-                fold_op = next.item_ready(level_seed + 1, fold::StepArg { op: next_plan, sketch, }).unwrap(),
+                fold_op = next.item_ready(level_seed + 1, &mut fold_ctx, fold::StepArg { op: next_plan, sketch, }).unwrap(),
             fold::Instruction::Perform(fold::Perform { op: fold::Op::VisitBlockFinish(fold::VisitBlockFinish { level_seed, next, .. }), next_plan, }) =>
-                fold_op = next.block_flushed(level_seed, fold::StepArg { op: next_plan, sketch, }).unwrap(),
-            fold::Instruction::Done(done) =>
-                return done.levels_iter().collect(),
+                fold_op = next.block_flushed(level_seed, &mut fold_ctx, fold::StepArg { op: next_plan, sketch, }).unwrap(),
+            fold::Instruction::Done =>
+                return fold_ctx.levels_iter().collect(),
         }
     }
 }

@@ -46,7 +46,7 @@ enum BlockCursor {
 }
 
 impl Script {
-    pub fn start() -> Script {
+    pub fn new() -> Script {
         Script { inner: Fsm::Init, }
     }
 
