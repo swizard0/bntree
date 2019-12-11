@@ -1,99 +1,281 @@
-use std::ops::Add;
-
-use super::{
-    fold,
-    super::sketch,
-};
-
-pub enum Instruction<BA, BW, O> {
-    PassMarkup(PassMarkup<BA, O>),
-    PassWrite(PassWrite<BW, O>),
-    Done,
-}
-
-pub struct PassMarkup<BA, O> {
-    pub op: OpMarkup<BA>,
-    pub next_fold: fold::Instruction<MarkupLevelSeed<BA, O>>,
-}
-
-pub enum OpMarkup<BA> {
-    InitialLevelSize(InitialLevelSize),
-    AllocMarkupBlock(AllocMarkupBlock),
-    X(BA),
-}
-
-pub struct PassWrite<BW, O> {
-    pub op: OpWrite<BW>,
-    pub next_fold: fold::Instruction<O>,
-}
-
-pub enum OpWrite<BW> {
-    X(BW),
-}
-
-#[derive(Clone, PartialEq, Debug)]
-pub enum Error {
-//     InvalidWriteArgForMarkupMode,
-//     InvalidMarkupArgForWriteMode,
-//     InvalidArgOpCombinationForLevelHeaderSize,
-//     LevelHeaderSize(fold::Error),
-//     InvalidArgOpCombinationForBlockReady,
-//     BlockReady(fold::Error),
-}
-
-pub struct Script {
-    inner: Fsm,
-}
-
-enum Fsm {
-    Init,
-    BusyMarkup,
-    BusyWrite,
-}
-
 struct TreeCoords<O> {
     offset: O,
     header_size: O,
 }
 
-pub struct Context<O> {
-    tree_coords: TreeCoords<O>,
-}
+pub mod markup {
+    use std::ops::Add;
 
-impl<O> Context<O> {
-    pub fn new(tree_offset: O, tree_header_size: O) -> Context<O> {
-        Context {
-            tree_coords: TreeCoords {
-                offset: tree_offset,
-                header_size: tree_header_size,
+    use super::{
+        TreeCoords,
+        super::{
+            fold,
+            super::sketch,
+        },
+    };
+
+    pub enum Instruction<B, O> {
+        Perform(Perform<B, O>),
+        Done,
+    }
+
+    pub struct Perform<B, O> {
+        pub op: Op<B>,
+        pub next_fold: fold::Instruction<LevelSeed<B, O>>,
+    }
+
+    pub enum Op<B> {
+        InitialLevelSize(InitialLevelSize),
+        AllocMarkupBlock(AllocMarkupBlock),
+        X(B),
+    }
+
+    #[derive(Clone, PartialEq, Debug)]
+    pub enum Error {
+        InvalidArgOpCombinationForLevelHeaderSize,
+        LevelHeaderSize(fold::Error),
+        InvalidArgOpCombinationForBlockReady,
+        BlockReady(fold::Error),
+    }
+
+    pub struct Context<B, O> {
+        tree_coords: TreeCoords<O>,
+        fold_ctx: fold::Context<LevelSeed<B, O>>,
+        child_pending: bool,
+    }
+
+    impl<B, O> Context<B, O> {
+        pub fn new(
+            fold_ctx: fold::Context<LevelSeed<B, O>>,
+            tree_offset: O,
+            tree_header_size: O,
+        )
+            -> Context<B, O>
+        {
+            Context {
+                tree_coords: TreeCoords {
+                    offset: tree_offset,
+                    header_size: tree_header_size,
+                },
+                fold_ctx,
+                child_pending: false,
             }
         }
     }
-}
 
-pub enum StepArg<'s, BA, BW, O> {
-    Markup {
-        op: fold::Instruction<MarkupLevelSeed<BA, O>>,
-        sketch: &'s sketch::Tree,
-    },
-    Write {
-        op: fold::Instruction<BW>,
-        sketch: &'s sketch::Tree,
-    },
-}
-
-impl Script {
-    pub fn new() -> Script {
-        Script { inner: Fsm::Init, }
+    pub struct StepArg<'s, B, O> {
+        pub op: fold::Instruction<LevelSeed<B, O>>,
+        pub sketch: &'s sketch::Tree,
     }
 
-    pub fn step<'s, BA, BW, O>(
-        mut self,
-        context: &mut Context<O>,
-        arg: StepArg<'s, BA, BW, O>,
-    )
-        -> Result<Instruction<BA, BW, O>, Error>
-    {
+    pub struct Script(());
+
+    impl Script {
+        pub fn new() -> Script {
+            Script(())
+        }
+
+        pub fn step<'s, B, O>(
+            self,
+            context: &mut Context<B, O>,
+            arg: StepArg<'s, B, O>,
+        )
+            -> Result<Instruction<B, O>, Error>
+        {
+            match arg.op {
+                fold::Instruction::Perform(fold::Perform { op: fold::Op::VisitLevel(fold::VisitLevel { level_index, .. }), .. }) =>
+                    Ok(Instruction::Perform(Perform {
+                        op: Op::InitialLevelSize(InitialLevelSize {
+                            level_index,
+                            next: InitialLevelSizeNext {
+                                level_index,
+                                script: self,
+                            },
+                        }),
+                        next_fold: arg.op,
+                    })),
+                fold::Instruction::Perform(
+                    fold::Perform { op: fold::Op::VisitBlockStart(fold::VisitBlockStart { level_index, block_index, .. }), .. }
+                ) =>
+                    Ok(Instruction::Perform(Perform {
+                        op: Op::AllocMarkupBlock(AllocMarkupBlock {
+                            level_index,
+                            block_index,
+                            next: AllocMarkupBlockNext {
+                                level_index,
+                                block_index,
+                                script: self,
+                            },
+                        }),
+                        next_fold: arg.op,
+                    })),
+                fold::Instruction::Perform(fold::Perform {
+                    op: fold::Op::VisitItem(fold::VisitItem { level_index, level_seed, next, .. }),
+                    next_plan,
+                }) =>
+                    Ok(Instruction::Perform(Perform {
+
+
+                //                     Instruction::WriteMarkupItem(WriteMarkupItem {
+                //                         level,
+                //                         block,
+                //                         child_pending: markup.child_pending,
+                //                         next: WriteMarkupItemNext {
+                //                             fold_levels_next: next,
+                //                             tree_coords: self.coords,
+                //                             level_seed,
+                //                             _marker: PhantomData,
+                //                         },
+                //                     }),
+
+                fold::Instruction::Perform(fold::Perform {
+                    op: fold::Op::VisitBlockFinish(fold::VisitBlockFinish { level_index, level_seed, next, .. }),
+                    next_plan,
+                }) =>
+                    unimplemented!(),
+                //                     Instruction::FinishMarkupBlock(FinishMarkupBlock {
+                //                         level,
+                //                         block,
+                //                         next: FinishMarkupBlockNext {
+                //                             fold_levels_next: next,
+                //                             tree_coords: self.coords,
+                //                             level_seed,
+                //                             _marker: PhantomData,
+                //                         },
+                //                     }),
+                fold::Instruction::Done => {
+                    unimplemented!()
+                    //                     let sketch = done.sketch();
+                    //                     let mut iter = done.levels_iter();
+                    //                     if let Some((level, markup)) = iter.next() {
+                    //                         let markup_car = LevelMarkup { level, markup, };
+                    //                         let mut markup_cdr = Vec::new();
+                    //                         let mut tree_total_size = self.coords.header_size.clone() +
+                    //                             markup_car.markup.level_size.clone();
+                    //                         for (level, markup) in iter {
+                    //                             tree_total_size = tree_total_size +
+                    //                                 markup.level_size.clone();
+                    //                             markup_cdr.push(LevelMarkup { level, markup, });
+                    //                         }
+                    //                         Instruction::WriteTreeHeader(WriteTreeHeader {
+                    //                             offset: self.coords.offset.clone(),
+                    //                             tree_total_size,
+                    //                             next: WriteTreeHeaderNext {
+                    //                                 sketch,
+                    //                                 levels_markup: LevelsMarkup {
+                    //                                     markup_car,
+                    //                                     markup_cdr,
+                    //                                     _marker: PhantomData,
+                    //                                 },
+                    //                                 tree_coords: self.coords,
+                    //                                 _marker: PhantomData,
+                    //                             },
+                    //                         })
+                    //                     } else {
+                    //                         Instruction::Done
+                    //                     }
+                },
+            }
+        }
+    }
+
+    pub struct LevelSeed<B, O> {
+        level_header_size: O,
+        level_size: O,
+        active_block: Option<B>,
+    }
+
+
+    pub struct InitialLevelSize {
+        pub level_index: usize,
+        pub next: InitialLevelSizeNext,
+    }
+
+    pub struct InitialLevelSizeNext {
+        script: Script,
+        level_index: usize,
+    }
+
+    impl InitialLevelSizeNext {
+        pub fn level_header_size<'s, B, O>(
+            self,
+            level_header_size: O,
+            context: &mut Context<B, O>,
+            arg: StepArg<'s, B, O>,
+        )
+            -> Result<Instruction<B, O>, Error>
+        where O: Clone
+        {
+            if let StepArg {
+                op: fold::Instruction::Perform(fold::Perform {
+                    op: fold::Op::VisitLevel(fold::VisitLevel { level_index, next }),
+                    next_plan,
+                }),
+                sketch,
+            } = arg {
+                let fold_op = next.level_ready(
+                    LevelSeed {
+                        level_size: level_header_size.clone(),
+                        level_header_size,
+                        active_block: None,
+                    },
+                    &mut context.fold_ctx,
+                    fold::StepArg { op: next_plan, sketch, },
+                ).map_err(Error::LevelHeaderSize)?;
+                self.script.step(context, StepArg { op: fold_op, sketch, })
+            } else {
+                Err(Error::InvalidArgOpCombinationForLevelHeaderSize)
+            }
+        }
+    }
+
+
+    pub struct AllocMarkupBlock {
+        pub level_index: usize,
+        pub block_index: usize,
+        pub next: AllocMarkupBlockNext,
+    }
+
+    pub struct AllocMarkupBlockNext {
+        script: Script,
+        level_index: usize,
+        block_index: usize,
+    }
+
+    impl AllocMarkupBlockNext {
+        pub fn block_ready<'s, B, O>(
+            self,
+            block: B,
+            context: &mut Context<B, O>,
+            arg: StepArg<'s, B, O>,
+        )
+            -> Result<Instruction<B, O>, Error>
+        where O: Add<Output = O>
+        {
+            if let StepArg {
+                op: fold::Instruction::Perform(fold::Perform {
+                    op: fold::Op::VisitBlockStart(fold::VisitBlockStart { level_index, block_index, level_seed, next, }),
+                    next_plan,
+                }),
+                sketch,
+            } = arg {
+                let fold_op = next.block_ready(
+                    LevelSeed {
+                        active_block: Some(block),
+                        ..level_seed
+                    },
+                    &mut context.fold_ctx,
+                    fold::StepArg { op: next_plan, sketch, },
+                ).map_err(Error::BlockReady)?;
+                self.script.step(context, StepArg { op: fold_op, sketch, })
+            } else {
+                Err(Error::InvalidArgOpCombinationForBlockReady)
+            }
+        }
+    }
+
+}
+
 //         match (self.inner, arg) {
 //             (Fsm::Init { tree_offset, tree_header_size, }, StepArg::Markup { op, sketch, }) =>
 //                 BusyMarkup {
@@ -114,9 +296,6 @@ impl Script {
 //             (Fsm::BusyWrite(..), StepArg::Markup { .. }) =>
 //                 Err(Error::InvalidMarkupArgForWriteMode),
 //         }
-        unimplemented!()
-    }
-}
 
 
 // struct BusyMarkup<O> {
@@ -222,99 +401,6 @@ impl Script {
 // //                         Instruction::Done
 // //                     }
 //             },
-//         }
-//     }
-// }
-
-
-pub struct MarkupLevelSeed<BA, O> {
-    level_header_size: O,
-    level_size: O,
-    active_block: Option<BA>,
-}
-
-
-pub struct InitialLevelSize {
-    pub level_index: usize,
-    pub next: InitialLevelSizeNext,
-}
-
-pub struct InitialLevelSizeNext {
-    script: Script,
-    level_index: usize,
-}
-
-// impl<O> InitialLevelSizeNext<O> {
-//     pub fn level_header_size<'s, BA, BW>(
-//         self,
-//         level_header_size: O,
-//         arg: StepArg<'s, BA, BW, O>,
-//     )
-//         -> Result<Instruction<BA, BW, O>, Error>
-//     where O: Clone
-//     {
-//         if let StepArg::Markup {
-//             op: fold::Instruction::Perform(fold::Perform {
-//                 op: fold::Op::VisitLevel(fold::VisitLevel { level_index, next }),
-//                 next_plan,
-//             }),
-//             sketch,
-//         } = arg {
-
-//             let fold_op = next.level_ready(
-//                 MarkupLevelSeed {
-//                     level_size: level_header_size.clone(),
-//                     level_header_size,
-//                     active_block: None,
-//                 },
-//                 fold::StepArg { op: next_plan, sketch, },
-//             ).map_err(Error::LevelHeaderSize)?;
-//             self.busy.step(fold_op, sketch)
-//         } else {
-//             Err(Error::InvalidArgOpCombinationForLevelHeaderSize)
-//         }
-//     }
-// }
-
-
-pub struct AllocMarkupBlock {
-    pub level_index: usize,
-    pub block_index: usize,
-    pub next: AllocMarkupBlockNext,
-}
-
-pub struct AllocMarkupBlockNext {
-    script: Script,
-    level_index: usize,
-    block_index: usize,
-}
-
-// impl<O> AllocMarkupBlockNext<O> {
-//     pub fn block_ready<'s, BA, BW>(
-//         self,
-//         block: BA,
-//         arg: StepArg<'s, BA, BW, O>,
-//     )
-//         -> Result<Instruction<BA, BW, O>, Error>
-//     where O: Add<Output = O>
-//     {
-//         if let StepArg::Markup {
-//             op: fold::Instruction::Perform(fold::Perform {
-//                 op: fold::Op::VisitBlockStart(fold::VisitBlockStart { level_index, block_index, level_seed, next, }),
-//                 next_plan,
-//             }),
-//             sketch,
-//         } = arg {
-//             let fold_op = next.block_ready(
-//                 MarkupLevelSeed {
-//                     active_block: Some(block),
-//                     ..level_seed
-//                 },
-//                 fold::StepArg { op: next_plan, sketch, },
-//             ).map_err(Error::BlockReady)?;
-//             self.busy.step(fold_op, sketch)
-//         } else {
-//             Err(Error::InvalidArgOpCombinationForBlockReady)
 //         }
 //     }
 // }
