@@ -4,13 +4,8 @@ use super::{
 };
 
 pub enum Instruction<S> {
-    Perform(Perform<S>),
+    Op(Op<S>),
     Done,
-}
-
-pub struct Perform<S> {
-    pub op: Op<S>,
-    pub next_plan: plan::Instruction,
 }
 
 pub enum Op<S> {
@@ -20,33 +15,50 @@ pub enum Op<S> {
     VisitBlockFinish(VisitBlockFinish<S>),
 }
 
+pub struct Continue {
+    pub plan_op: plan::Instruction,
+    pub next: Script,
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub enum Error {
+    UnexpectedNonZeroBlockIndexForLevelState,
+    UnexpectedZeroBlockIndexForLevelState,
     InvalidLevelStateForBlockStart,
     InvalidLevelStateForWriteItem,
     InvalidLevelStateForBlockFinish,
-    InvalidPlanBlockStartLevelIndex,
-    UnexpectedNonZeroBlockIndexForLevelStateInit,
-    UnexpectedLevelStateActiveForPlanBlockStart {
+    InvalidPlanBlockStartLevelIndex {
+        level_index: usize,
+    },
+    UnexpectedLevelStateForPlanBlockStart {
         level_index: usize,
         block_index: usize,
         prev_block_index: usize,
     },
-    UnexpectedZeroBlockIndexForLevelStateFlushed,
-    InvalidPlanBlockItemLevelIndex,
+    InvalidPlanBlockItemLevelIndex {
+        level_index: usize,
+    },
+    WritingItemBeforeLevelInitialize,
     WritingItemBeforeBlockInitialize,
     WritingItemAfterBlockFlush,
     WritingItemInWrongBlock {
         block_index: usize,
         active_block_index: usize,
     },
-    InvalidPlanBlockFinisLevelIndex,
+    InvalidPlanBlockFinisLevelIndex {
+        level_index: usize,
+    },
+    FinishingBlockBeforeLevelInitialize,
     FinishingBlockBeforeBlockInitialize,
     FinishingTheWrongBlock {
         block_index: usize,
         active_block_index: usize,
     },
     FinishingBlockAfterBlockFlush,
+    InvalidLevelIndexForVisitLevel {
+        level_index: usize,
+    },
+    AlreadyInitializedLevelForVisitLevel,
     InvalidLevelIndexForVisitBlockStart {
         level_index: usize,
     },
@@ -76,19 +88,17 @@ pub struct Context<S> {
 }
 
 enum LevelState<S> {
-    Init,
-    Active {
+    Bootstrap,
+    SeenVisitLevel {
+        level_seed: S,
+    },
+    SeenVisitBlockStart {
         level_seed: S,
         block_index: usize,
     },
-    Flushed {
+    SeenVisitBlockFinish {
         level_seed: S,
     },
-}
-
-pub struct StepArg<'s> {
-    pub op: plan::Instruction,
-    pub sketch: &'s sketch::Tree,
 }
 
 
@@ -97,122 +107,135 @@ impl Script {
         Script { inner: Fsm::Init, }
     }
 
-    pub fn step<'s, S>(mut self, context: &mut Context<S>, arg: StepArg<'s>) -> Result<Instruction<S>, Error> {
+    pub fn step<'s, S>(mut self, context: &mut Context<S>, op: plan::Instruction, sketch: &'s sketch::Tree) -> Result<Instruction<S>, Error> {
         if let Fsm::Init = self.inner {
             context.levels.clear();
             context.levels.extend(
-                arg.sketch
+                sketch
                     .levels()
                     .iter()
-                    .map(|_level| Some(LevelState::Init))
+                    .map(|_level| Some(LevelState::Bootstrap))
             );
             self.inner = Fsm::Busy;
         }
 
-        match arg.op {
-            plan::Instruction::Perform(
-                plan::Perform { op: plan::Op::BlockStart, level_index, block_index, next, }
-            ) if level_index < context.levels.len() =>
-                match context.levels[level_index].take() {
+        match op {
+            plan::Instruction::Perform(plan::Perform { op: plan::Op::BlockStart, level_index, block_index, next, })  =>
+                match context.levels.get_mut(level_index).map(Option::take) {
                     None =>
+                        Err(Error::InvalidPlanBlockStartLevelIndex { level_index, }),
+                    Some(None) =>
                         Err(Error::InvalidLevelStateForBlockStart),
-                    Some(LevelState::Init) if block_index == 0 =>
-                        Ok(Instruction::Perform(Perform {
-                            op: Op::VisitLevel(VisitLevel {
+                    Some(Some(LevelState::Bootstrap)) if block_index == 0 =>
+                        Ok(Instruction::Op(Op::VisitLevel(VisitLevel {
+                            level_index,
+                            next: VisitLevelNext {
                                 level_index,
-                                next: VisitLevelNext { level_index, script: self, },
-                            }),
-                            next_plan: next.step(arg.sketch),
-                        })),
-                    Some(LevelState::Init) =>
-                        Err(Error::UnexpectedNonZeroBlockIndexForLevelStateInit),
-                    Some(LevelState::Active { block_index: prev_block_index, .. }) =>
-                        Err(Error::UnexpectedLevelStateActiveForPlanBlockStart {
+                                script: self,
+                                plan_next: next,
+                            },
+                        }))),
+                    Some(Some(LevelState::Bootstrap)) =>
+                        Err(Error::UnexpectedNonZeroBlockIndexForLevelState),
+                    Some(Some(LevelState::SeenVisitLevel { level_seed, })) if block_index == 0 =>
+                        Ok(Instruction::Op(Op::VisitBlockStart(VisitBlockStart {
+                            level_index,
+                            level_seed,
+                            block_index: 0,
+                            next: VisitBlockStartNext {
+                                level_index,
+                                block_index,
+                                script: self,
+                                plan_next: next,
+                            },
+                        }))),
+                    Some(Some(LevelState::SeenVisitLevel { .. })) =>
+                        Err(Error::UnexpectedNonZeroBlockIndexForLevelState),
+                    Some(Some(LevelState::SeenVisitBlockStart { block_index: prev_block_index, .. })) =>
+                        Err(Error::UnexpectedLevelStateForPlanBlockStart {
                             level_index,
                             block_index,
                             prev_block_index,
                         }),
-                    Some(LevelState::Flushed { level_seed, }) if block_index > 0 =>
-                        Ok(Instruction::Perform(Perform {
-                            op: Op::VisitBlockStart(VisitBlockStart {
+                    Some(Some(LevelState::SeenVisitBlockFinish { level_seed, })) if block_index > 0 =>
+                        Ok(Instruction::Op(Op::VisitBlockStart(VisitBlockStart {
+                            level_index,
+                            level_seed,
+                            block_index,
+                            next: VisitBlockStartNext {
                                 level_index,
-                                level_seed,
                                 block_index,
-                                next: VisitBlockStartNext {
-                                    script: self,
-                                    level_index,
-                                    block_index,
-                                },
-                            }),
-                            next_plan: next.step(arg.sketch),
-                        })),
-                    Some(LevelState::Flushed { .. }) =>
-                        Err(Error::UnexpectedZeroBlockIndexForLevelStateFlushed),
+                                script: self,
+                                plan_next: next,
+                            },
+                        }))),
+                    Some(Some(LevelState::SeenVisitBlockFinish { .. })) =>
+                        Err(Error::UnexpectedZeroBlockIndexForLevelState),
                 },
-            plan::Instruction::Perform(plan::Perform { op: plan::Op::BlockStart, .. }) =>
-                Err(Error::InvalidPlanBlockStartLevelIndex),
 
             plan::Instruction::Perform(
                 plan::Perform {
                     op: plan::Op::BlockItem { index: item_index, }, level_index, block_index, next,
                 },
-            ) if level_index < context.levels.len() =>
-                match context.levels[level_index].take() {
+            ) =>
+                match context.levels.get_mut(level_index).map(Option::take) {
                     None =>
+                        Err(Error::InvalidPlanBlockItemLevelIndex { level_index, }),
+                    Some(None) =>
                         Err(Error::InvalidLevelStateForWriteItem),
-                    Some(LevelState::Init) =>
+                    Some(Some(LevelState::Bootstrap)) =>
+                        Err(Error::WritingItemBeforeLevelInitialize),
+                    Some(Some(LevelState::SeenVisitLevel { .. })) =>
                         Err(Error::WritingItemBeforeBlockInitialize),
-                    Some(LevelState::Active { level_seed, block_index: active_block_index, }) if active_block_index == block_index =>
-                        Ok(Instruction::Perform(Perform {
-                            op: Op::VisitItem(VisitItem {
+                    Some(Some(LevelState::SeenVisitBlockStart { level_seed, block_index: active_block_index, }))
+                        if active_block_index == block_index =>
+                        Ok(Instruction::Op(Op::VisitItem(VisitItem {
+                            level_index,
+                            level_seed,
+                            block_index,
+                            block_item_index: item_index,
+                            next: VisitItemNext {
                                 level_index,
-                                level_seed,
                                 block_index,
-                                block_item_index: item_index,
-                                next: VisitItemNext {
-                                    script: self,
-                                    level_index,
-                                    block_index,
-                                },
-                            }),
-                            next_plan: next.step(arg.sketch),
-                        })),
-                    Some(LevelState::Active { block_index: active_block_index, .. }) =>
+                                script: self,
+                                plan_next: next,
+                            },
+                        }))),
+                    Some(Some(LevelState::SeenVisitBlockStart { block_index: active_block_index, .. })) =>
                         Err(Error::WritingItemInWrongBlock { active_block_index, block_index, }),
-                    Some(LevelState::Flushed { .. }) =>
+                    Some(Some(LevelState::SeenVisitBlockFinish { .. })) =>
                         Err(Error::WritingItemAfterBlockFlush),
                 },
-            plan::Instruction::Perform(plan::Perform { op: plan::Op::BlockItem { .. }, .. }) =>
-                Err(Error::InvalidPlanBlockItemLevelIndex),
 
             plan::Instruction::Perform(
                 plan::Perform { op: plan::Op::BlockFinish, level_index, block_index, next, }
-            ) if level_index < context.levels.len() =>
-                match context.levels[level_index].take() {
+            ) =>
+                match context.levels.get_mut(level_index).map(Option::take) {
                     None =>
+                        Err(Error::InvalidPlanBlockFinisLevelIndex { level_index, }),
+                    Some(None) =>
                         Err(Error::InvalidLevelStateForBlockFinish),
-                    Some(LevelState::Init) =>
+                    Some(Some(LevelState::Bootstrap)) =>
+                        Err(Error::FinishingBlockBeforeLevelInitialize),
+                    Some(Some(LevelState::SeenVisitLevel { .. })) =>
                         Err(Error::FinishingBlockBeforeBlockInitialize),
-                    Some(LevelState::Active { level_seed, block_index: active_block_index, }) if active_block_index == block_index =>
-                        Ok(Instruction::Perform(Perform {
-                            op: Op::VisitBlockFinish(VisitBlockFinish {
+                    Some(Some(LevelState::SeenVisitBlockStart { level_seed, block_index: active_block_index, }))
+                        if active_block_index == block_index =>
+                        Ok(Instruction::Op(Op::VisitBlockFinish(VisitBlockFinish {
+                            level_index,
+                            level_seed,
+                            block_index,
+                            next: VisitBlockFinishNext {
                                 level_index,
-                                level_seed,
-                                block_index,
-                                next: VisitBlockFinishNext {
-                                    script: self,
-                                    level_index,
-                                },
-                            }),
-                            next_plan: next.step(arg.sketch),
-                        })),
-                    Some(LevelState::Active { block_index: active_block_index, .. }) =>
+                                script: self,
+                                plan_next: next,
+                            },
+                        }))),
+                    Some(Some(LevelState::SeenVisitBlockStart { block_index: active_block_index, .. })) =>
                         Err(Error::FinishingTheWrongBlock { active_block_index, block_index, }),
-                    Some(LevelState::Flushed { .. }) =>
+                    Some(Some(LevelState::SeenVisitBlockFinish { .. })) =>
                         Err(Error::FinishingBlockAfterBlockFlush),
-                }
-            plan::Instruction::Perform(plan::Perform { op: plan::Op::BlockFinish, .. }) =>
-                Err(Error::InvalidPlanBlockFinisLevelIndex),
+                },
 
             plan::Instruction::Done =>
                 Ok(Instruction::Done),
@@ -229,23 +252,26 @@ pub struct VisitLevel {
 pub struct VisitLevelNext {
     level_index: usize,
     script: Script,
+    plan_next: plan::Script,
 }
 
 impl VisitLevelNext {
-    pub fn level_ready<'s, S>(self, level_seed: S, _context: &mut Context<S>, arg: StepArg<'s>) -> Result<Instruction<S>, Error> {
-        Ok(Instruction::Perform(Perform {
-            op: Op::VisitBlockStart(VisitBlockStart {
+    pub fn level_ready<S>(self, level_seed: S, context: &mut Context<S>) -> Result<Continue, Error> {
+        let state = context.levels.get_mut(self.level_index)
+            .ok_or(Error::InvalidLevelIndexForVisitLevel { level_index: self.level_index, })?;
+        if state.is_some() {
+            return Err(Error::AlreadyInitializedLevelForVisitLevel);
+        }
+        *state = Some(LevelState::SeenVisitLevel { level_seed, });
+        Ok(Continue {
+            next: self.script,
+            plan_op: plan::Instruction::Perform(plan::Perform {
+                op: plan::Op::BlockStart,
                 level_index: self.level_index,
-                level_seed,
                 block_index: 0,
-                next: VisitBlockStartNext {
-                    script: self.script,
-                    level_index: self.level_index,
-                    block_index: 0,
-                },
+                next: self.plan_next,
             }),
-            next_plan: arg.op,
-        }))
+        })
     }
 }
 
@@ -258,23 +284,24 @@ pub struct VisitBlockStart<S> {
 }
 
 pub struct VisitBlockStartNext {
-    script: Script,
     level_index: usize,
     block_index: usize,
+    script: Script,
+    plan_next: plan::Script,
 }
 
 impl VisitBlockStartNext {
-    pub fn block_ready<'s, S>(self, level_seed: S, context: &mut Context<S>, arg: StepArg<'s>) -> Result<Instruction<S>, Error> {
+    pub fn block_ready<'s, S>(self, level_seed: S, context: &mut Context<S>, sketch: &'s sketch::Tree) -> Result<Continue, Error> {
         let state = context.levels.get_mut(self.level_index)
             .ok_or(Error::InvalidLevelIndexForVisitBlockStart { level_index: self.level_index, })?;
         if state.is_some() {
             return Err(Error::AlreadyInitializedLevelForVisitBlockStart);
         }
-        *state = Some(LevelState::Active {
+        *state = Some(LevelState::SeenVisitBlockStart {
             level_seed,
             block_index: self.block_index,
         });
-        self.script.step(context, arg)
+        Ok(Continue { next: self.script, plan_op: self.plan_next.step(sketch), })
     }
 }
 
@@ -288,23 +315,24 @@ pub struct VisitItem<S> {
 }
 
 pub struct VisitItemNext {
-    script: Script,
     level_index: usize,
     block_index: usize,
+    script: Script,
+    plan_next: plan::Script,
 }
 
 impl VisitItemNext {
-    pub fn item_ready<'s, S>(self, level_seed: S, context: &mut Context<S>, arg: StepArg<'s>) -> Result<Instruction<S>, Error> {
+    pub fn item_ready<'s, S>(self, level_seed: S, context: &mut Context<S>, sketch: &'s sketch::Tree) -> Result<Continue, Error> {
         let state = context.levels.get_mut(self.level_index)
             .ok_or(Error::InvalidLevelIndexForVisitItem { level_index: self.level_index, })?;
         if state.is_some() {
             return Err(Error::AlreadyInitializedLevelForVisitItem);
         }
-        *state = Some(LevelState::Active {
+        *state = Some(LevelState::SeenVisitBlockStart {
             level_seed,
             block_index: self.block_index,
         });
-        self.script.step(context, arg)
+        Ok(Continue { next: self.script, plan_op: self.plan_next.step(sketch), })
     }
 }
 
@@ -317,19 +345,20 @@ pub struct VisitBlockFinish<S> {
 }
 
 pub struct VisitBlockFinishNext {
-    script: Script,
     level_index: usize,
+    script: Script,
+    plan_next: plan::Script,
 }
 
 impl VisitBlockFinishNext {
-    pub fn block_flushed<'s, S>(self, level_seed: S, context: &mut Context<S>, arg: StepArg<'s>) -> Result<Instruction<S>, Error> {
+    pub fn block_flushed<'s, S>(self, level_seed: S, context: &mut Context<S>, sketch: &'s sketch::Tree) -> Result<Continue, Error> {
         let state = context.levels.get_mut(self.level_index)
             .ok_or(Error::InvalidLevelIndexForVisitBlockFinish { level_index: self.level_index, })?;
         if state.is_some() {
             return Err(Error::AlreadyInitializedLevelForVisitBlockFinish);
         }
-        *state = Some(LevelState::Flushed { level_seed, });
-        self.script.step(context, arg)
+        *state = Some(LevelState::SeenVisitBlockFinish { level_seed, });
+        Ok(Continue { next: self.script, plan_op: self.plan_next.step(sketch), })
     }
 }
 
@@ -340,7 +369,7 @@ impl<S> Context<S> {
             .into_iter()
             .enumerate()
             .filter_map(|(level_index, fold_level)| {
-                if let Some(LevelState::Flushed { level_seed, }) = fold_level {
+                if let Some(LevelState::SeenVisitBlockFinish { level_seed, }) = fold_level {
                     Some((level_index, level_seed))
                 } else {
                     None
