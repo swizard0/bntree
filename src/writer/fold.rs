@@ -16,8 +16,13 @@ pub enum Op<S> {
 }
 
 pub struct Continue {
-    pub plan_op: plan::Instruction,
+    pub plan_action: PlanAction,
     pub next: Script,
+}
+
+pub enum PlanAction {
+    Idle(plan::Instruction),
+    Step(plan::Script),
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -73,18 +78,22 @@ pub enum Error {
     AlreadyInitializedLevelForVisitBlockFinish,
 }
 
-pub struct Script {
-    inner: Fsm,
-}
+pub struct Script(());
 
-enum Fsm {
-    Init,
-    Busy,
-}
-
-#[derive(Default)]
 pub struct Context<S> {
     levels: Vec<Option<LevelState<S>>>,
+}
+
+impl<S> Context<S> {
+    pub fn new<'s>(sketch: &'s sketch::Tree) -> Context<S> {
+        Context {
+            levels: sketch
+                .levels()
+                .iter()
+                .map(|_level| Some(LevelState::Bootstrap))
+                .collect(),
+        }
+    }
 }
 
 enum LevelState<S> {
@@ -104,21 +113,10 @@ enum LevelState<S> {
 
 impl Script {
     pub fn new() -> Script {
-        Script { inner: Fsm::Init, }
+        Script(())
     }
 
-    pub fn step<'s, S>(mut self, context: &mut Context<S>, op: plan::Instruction, sketch: &'s sketch::Tree) -> Result<Instruction<S>, Error> {
-        if let Fsm::Init = self.inner {
-            context.levels.clear();
-            context.levels.extend(
-                sketch
-                    .levels()
-                    .iter()
-                    .map(|_level| Some(LevelState::Bootstrap))
-            );
-            self.inner = Fsm::Busy;
-        }
-
+    pub fn step<S>(self, context: &mut Context<S>, op: plan::Instruction) -> Result<Instruction<S>, Error> {
         match op {
             plan::Instruction::Perform(plan::Perform { op: plan::Op::BlockStart, level_index, block_index, next, })  =>
                 match context.levels.get_mut(level_index).map(Option::take) {
@@ -264,13 +262,13 @@ impl VisitLevelNext {
         }
         *state = Some(LevelState::SeenVisitLevel { level_seed, });
         Ok(Continue {
-            next: self.script,
-            plan_op: plan::Instruction::Perform(plan::Perform {
+            plan_action: PlanAction::Idle(plan::Instruction::Perform(plan::Perform {
                 op: plan::Op::BlockStart,
                 level_index: self.level_index,
                 block_index: 0,
                 next: self.plan_next,
-            }),
+            })),
+            next: self.script,
         })
     }
 }
@@ -291,7 +289,7 @@ pub struct VisitBlockStartNext {
 }
 
 impl VisitBlockStartNext {
-    pub fn block_ready<'s, S>(self, level_seed: S, context: &mut Context<S>, sketch: &'s sketch::Tree) -> Result<Continue, Error> {
+    pub fn block_ready<'s, S>(self, level_seed: S, context: &mut Context<S>) -> Result<Continue, Error> {
         let state = context.levels.get_mut(self.level_index)
             .ok_or(Error::InvalidLevelIndexForVisitBlockStart { level_index: self.level_index, })?;
         if state.is_some() {
@@ -301,7 +299,10 @@ impl VisitBlockStartNext {
             level_seed,
             block_index: self.block_index,
         });
-        Ok(Continue { next: self.script, plan_op: self.plan_next.step(sketch), })
+        Ok(Continue {
+            plan_action: PlanAction::Step(self.plan_next),
+            next: self.script,
+        })
     }
 }
 
@@ -322,7 +323,7 @@ pub struct VisitItemNext {
 }
 
 impl VisitItemNext {
-    pub fn item_ready<'s, S>(self, level_seed: S, context: &mut Context<S>, sketch: &'s sketch::Tree) -> Result<Continue, Error> {
+    pub fn item_ready<'s, S>(self, level_seed: S, context: &mut Context<S>) -> Result<Continue, Error> {
         let state = context.levels.get_mut(self.level_index)
             .ok_or(Error::InvalidLevelIndexForVisitItem { level_index: self.level_index, })?;
         if state.is_some() {
@@ -332,7 +333,10 @@ impl VisitItemNext {
             level_seed,
             block_index: self.block_index,
         });
-        Ok(Continue { next: self.script, plan_op: self.plan_next.step(sketch), })
+        Ok(Continue {
+            plan_action: PlanAction::Step(self.plan_next),
+            next: self.script,
+        })
     }
 }
 
@@ -351,14 +355,17 @@ pub struct VisitBlockFinishNext {
 }
 
 impl VisitBlockFinishNext {
-    pub fn block_flushed<'s, S>(self, level_seed: S, context: &mut Context<S>, sketch: &'s sketch::Tree) -> Result<Continue, Error> {
+    pub fn block_flushed<'s, S>(self, level_seed: S, context: &mut Context<S>) -> Result<Continue, Error> {
         let state = context.levels.get_mut(self.level_index)
             .ok_or(Error::InvalidLevelIndexForVisitBlockFinish { level_index: self.level_index, })?;
         if state.is_some() {
             return Err(Error::AlreadyInitializedLevelForVisitBlockFinish);
         }
         *state = Some(LevelState::SeenVisitBlockFinish { level_seed, });
-        Ok(Continue { next: self.script, plan_op: self.plan_next.step(sketch), })
+        Ok(Continue {
+            plan_action: PlanAction::Step(self.plan_next),
+            next: self.script,
+        })
     }
 }
 
