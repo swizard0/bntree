@@ -275,6 +275,7 @@ pub mod markup {
                 ).map_err(Error::WriteItem)?;
             let fold_op = next.step(&mut context.fold_ctx, plan_op, sketch)
                 .map_err(Error::WriteItem)?;
+            context.child_pending = false;
             Ok(Continue { fold_op, next: self.script, })
         }
     }
