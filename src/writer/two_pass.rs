@@ -8,10 +8,7 @@ pub mod markup {
 
     use super::{
         TreeCoords,
-        super::{
-            fold,
-            super::sketch,
-        },
+        super::fold,
     };
 
     pub enum Instruction<B, O> {
@@ -26,8 +23,13 @@ pub mod markup {
     }
 
     pub struct Continue<B, O> {
-        pub fold_op: fold::Instruction<LevelSeed<B, O>>,
+        pub fold_action: FoldAction<B, O>,
         pub next: Script,
+    }
+
+    pub enum FoldAction<B, O> {
+        Idle(fold::Instruction<LevelSeed<B, O>>),
+        Step(fold::Continue),
     }
 
     #[derive(Clone, PartialEq, Debug)]
@@ -38,26 +40,18 @@ pub mod markup {
         NoActiveBlockWhileWriteItem,
     }
 
-    pub struct Context<B, O> {
+    pub struct Context<O> {
         tree_coords: TreeCoords<O>,
-        fold_ctx: fold::Context<LevelSeed<B, O>>,
         child_pending: bool,
     }
 
-    impl<B, O> Context<B, O> {
-        pub fn new(
-            fold_ctx: fold::Context<LevelSeed<B, O>>,
-            tree_offset: O,
-            tree_header_size: O,
-        )
-            -> Context<B, O>
-        {
+    impl<O> Context<O> {
+        pub fn new(tree_offset: O, tree_header_size: O) -> Context<O> {
             Context {
                 tree_coords: TreeCoords {
                     offset: tree_offset,
                     header_size: tree_header_size,
                 },
-                fold_ctx,
                 child_pending: false,
             }
         }
@@ -70,7 +64,7 @@ pub mod markup {
             Script(())
         }
 
-        pub fn step<'s, B, O>(self, context: &mut Context<B, O>, op: fold::Instruction<LevelSeed<B, O>>) -> Result<Instruction<B, O>, Error> {
+        pub fn step<'s, B, O>(self, context: &mut Context<O>, op: fold::Instruction<LevelSeed<B, O>>) -> Result<Instruction<B, O>, Error> {
             match op {
                 fold::Instruction::Op(fold::Op::VisitLevel(fold::VisitLevel { level_index, next, })) =>
                     Ok(Instruction::Op(Op::InitialLevelSize(InitialLevelSize {
@@ -180,24 +174,25 @@ pub mod markup {
         pub fn level_header_size<'s, B, O>(
             self,
             level_header_size: O,
-            context: &mut Context<B, O>,
-            sketch: &'s sketch::Tree,
+            context: &mut Context<O>,
+            fold_ctx: &mut fold::Context<LevelSeed<B, O>>,
         )
             -> Result<Continue<B, O>, Error>
         where O: Clone
         {
-            let fold::Continue { plan_op, next, } =
+            let fold_continue =
                 self.fold_next.level_ready(
                     LevelSeed {
                         level_size: level_header_size.clone(),
                         level_header_size,
                         active_block: None,
                     },
-                    &mut context.fold_ctx,
+                    fold_ctx,
                 ).map_err(Error::LevelHeaderSize)?;
-            let fold_op = next.step(&mut context.fold_ctx, plan_op, sketch)
-                .map_err(Error::LevelHeaderSize)?;
-            Ok(Continue { fold_op, next: self.script, })
+            Ok(Continue {
+                fold_action: FoldAction::Step(fold_continue),
+                next: self.script,
+            })
         }
     }
 
@@ -218,24 +213,24 @@ pub mod markup {
         pub fn block_ready<'s>(
             self,
             block: B,
-            context: &mut Context<B, O>,
-            sketch: &'s sketch::Tree,
+            context: &mut Context<O>,
+            fold_ctx: &mut fold::Context<LevelSeed<B, O>>,
         )
             -> Result<Continue<B, O>, Error>
         where O: Add<Output = O>
         {
-            let fold::Continue { plan_op, next, } =
+            let fold_continue =
                 self.fold_next.block_ready(
                     LevelSeed {
                         active_block: Some(block),
                         ..self.level_seed
                     },
-                    &mut context.fold_ctx,
-                    sketch,
+                    fold_ctx,
                 ).map_err(Error::LevelHeaderSize)?;
-            let fold_op = next.step(&mut context.fold_ctx, plan_op, sketch)
-                .map_err(Error::LevelHeaderSize)?;
-            Ok(Continue { fold_op, next: self.script, })
+            Ok(Continue {
+                fold_action: FoldAction::Step(fold_continue),
+                next: self.script,
+            })
         }
     }
 
@@ -259,24 +254,23 @@ pub mod markup {
         pub fn item_written<'s>(
             self,
             block: B,
-            context: &mut Context<B, O>,
-            sketch: &'s sketch::Tree,
+            context: &mut Context<O>,
+            fold_ctx: &mut fold::Context<LevelSeed<B, O>>,
         )
             -> Result<Continue<B, O>, Error>
         {
-            let fold::Continue { plan_op, next, } =
+            let fold_continue =
                 self.fold_next.item_ready(
                     LevelSeed {
                         active_block: Some(block),
                         ..self.level_seed
                     },
-                    &mut context.fold_ctx,
-                    sketch,
+                    fold_ctx,
                 ).map_err(Error::WriteItem)?;
-            let fold_op = next.step(&mut context.fold_ctx, plan_op, sketch)
-                .map_err(Error::WriteItem)?;
-            context.child_pending = false;
-            Ok(Continue { fold_op, next: self.script, })
+            Ok(Continue {
+                fold_action: FoldAction::Step(fold_continue),
+                next: self.script,
+            })
         }
     }
 
