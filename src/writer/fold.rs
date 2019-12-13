@@ -289,7 +289,7 @@ pub struct VisitBlockStartNext {
 }
 
 impl VisitBlockStartNext {
-    pub fn block_ready<'s, S>(self, level_seed: S, context: &mut Context<S>) -> Result<Continue, Error> {
+    pub fn block_ready<S>(self, level_seed: S, context: &mut Context<S>) -> Result<Continue, Error> {
         let state = context.levels.get_mut(self.level_index)
             .ok_or(Error::InvalidLevelIndexForVisitBlockStart { level_index: self.level_index, })?;
         if state.is_some() {
@@ -323,7 +323,7 @@ pub struct VisitItemNext {
 }
 
 impl VisitItemNext {
-    pub fn item_ready<'s, S>(self, level_seed: S, context: &mut Context<S>) -> Result<Continue, Error> {
+    pub fn item_ready<S>(self, level_seed: S, context: &mut Context<S>) -> Result<Continue, Error> {
         let state = context.levels.get_mut(self.level_index)
             .ok_or(Error::InvalidLevelIndexForVisitItem { level_index: self.level_index, })?;
         if state.is_some() {
@@ -355,7 +355,7 @@ pub struct VisitBlockFinishNext {
 }
 
 impl VisitBlockFinishNext {
-    pub fn block_flushed<'s, S>(self, level_seed: S, context: &mut Context<S>) -> Result<Continue, Error> {
+    pub fn block_flushed<S>(self, level_seed: S, context: &mut Context<S>) -> Result<Continue, Error> {
         let state = context.levels.get_mut(self.level_index)
             .ok_or(Error::InvalidLevelIndexForVisitBlockFinish { level_index: self.level_index, })?;
         if state.is_some() {
