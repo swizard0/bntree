@@ -3,6 +3,7 @@ struct TreeCoords<O> {
     header_size: O,
 }
 
+#[derive(Clone, PartialEq, Debug)]
 pub struct LevelCoords<O> {
     pub index: usize,
     pub header_size: O,
