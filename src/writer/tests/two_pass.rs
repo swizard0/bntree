@@ -6,7 +6,7 @@ use super::super::{
 };
 
 #[test]
-fn tree17_4() {
+fn tree17_4_markup() {
     let sketch = sketch::Tree::new(17, 4);
 
     use markup::{Instr, AllocBlock};
@@ -43,6 +43,52 @@ fn tree17_4() {
         Instr::Done(vec![
             two_pass::LevelCoords { index: 0, header_size: 5, total_size: 9 },
             two_pass::LevelCoords { index: 1, header_size: 5, total_size: 18 },
+        ]),
+    ]);
+}
+
+#[test]
+fn tree17_3_markup() {
+    let sketch = sketch::Tree::new(17, 3);
+
+    use markup::{Instr, AllocBlock};
+    markup::interpret(&sketch, vec![
+        Instr::InitialLevelSize { level_index: 2 },
+        Instr::AllocMarkupBlock { level_index: 2, block_index: 0 },
+        Instr::WriteMarkupItem { level_index: 2, block_index: 0, block_item_index: 0, block: AllocBlock { index: 0, items: 0 }, child_pending: false },
+        Instr::WriteMarkupItem { level_index: 2, block_index: 0, block_item_index: 1, block: AllocBlock { index: 0, items: 1 }, child_pending: false },
+        Instr::WriteMarkupItem { level_index: 2, block_index: 0, block_item_index: 2, block: AllocBlock { index: 0, items: 2 }, child_pending: false },
+        Instr::FinishMarkupBlock { level_index: 2, block_index: 0, block: AllocBlock { index: 0, items: 3 } },
+        Instr::InitialLevelSize { level_index: 1 },
+        Instr::AllocMarkupBlock { level_index: 1, block_index: 0 },
+        Instr::WriteMarkupItem { level_index: 1, block_index: 0, block_item_index: 0, block: AllocBlock { index: 1, items: 0 }, child_pending: true },
+        Instr::AllocMarkupBlock { level_index: 2, block_index: 1 },
+        Instr::WriteMarkupItem { level_index: 2, block_index: 1, block_item_index: 0, block: AllocBlock { index: 2, items: 0 }, child_pending: false },
+        Instr::WriteMarkupItem { level_index: 2, block_index: 1, block_item_index: 1, block: AllocBlock { index: 2, items: 1 }, child_pending: false },
+        Instr::FinishMarkupBlock { level_index: 2, block_index: 1, block: AllocBlock { index: 2, items: 2 } },
+        Instr::WriteMarkupItem { level_index: 1, block_index: 0, block_item_index: 1, block: AllocBlock { index: 1, items: 1 }, child_pending: true },
+        Instr::WriteMarkupItem { level_index: 1, block_index: 0, block_item_index: 2, block: AllocBlock { index: 1, items: 2 }, child_pending: false },
+        Instr::FinishMarkupBlock { level_index: 1, block_index: 0, block: AllocBlock { index: 1, items: 3 } },
+        Instr::InitialLevelSize { level_index: 0 },
+        Instr::AllocMarkupBlock { level_index: 0, block_index: 0 },
+        Instr::WriteMarkupItem { level_index: 0, block_index: 0, block_item_index: 0, block: AllocBlock { index: 3, items: 0 }, child_pending: true },
+        Instr::AllocMarkupBlock { level_index: 1, block_index: 1 },
+        Instr::WriteMarkupItem { level_index: 1, block_index: 1, block_item_index: 0, block: AllocBlock { index: 4, items: 0 }, child_pending: false },
+        Instr::WriteMarkupItem { level_index: 1, block_index: 1, block_item_index: 1, block: AllocBlock { index: 4, items: 1 }, child_pending: false },
+        Instr::WriteMarkupItem { level_index: 1, block_index: 1, block_item_index: 2, block: AllocBlock { index: 4, items: 2 }, child_pending: false },
+        Instr::FinishMarkupBlock { level_index: 1, block_index: 1, block: AllocBlock { index: 4, items: 3 } },
+        Instr::WriteMarkupItem { level_index: 0, block_index: 0, block_item_index: 1, block: AllocBlock { index: 3, items: 1 }, child_pending: true },
+        Instr::AllocMarkupBlock { level_index: 1, block_index: 2 },
+        Instr::WriteMarkupItem { level_index: 1, block_index: 2, block_item_index: 0, block: AllocBlock { index: 5, items: 0 }, child_pending: false },
+        Instr::WriteMarkupItem { level_index: 1, block_index: 2, block_item_index: 1, block: AllocBlock { index: 5, items: 1 }, child_pending: false },
+        Instr::WriteMarkupItem { level_index: 1, block_index: 2, block_item_index: 2, block: AllocBlock { index: 5, items: 2 }, child_pending: false },
+        Instr::FinishMarkupBlock { level_index: 1, block_index: 2, block: AllocBlock { index: 5, items: 3 } },
+        Instr::WriteMarkupItem { level_index: 0, block_index: 0, block_item_index: 2, block: AllocBlock { index: 3, items: 2 }, child_pending: true },
+        Instr::FinishMarkupBlock { level_index: 0, block_index: 0, block: AllocBlock { index: 3, items: 3 } },
+        Instr::Done(vec![
+            two_pass::LevelCoords { index: 0, header_size: 5, total_size: 8 },
+            two_pass::LevelCoords { index: 1, header_size: 5, total_size: 14 },
+            two_pass::LevelCoords { index: 2, header_size: 5, total_size: 10 }
         ]),
     ]);
 }
