@@ -386,6 +386,10 @@ pub mod write {
     pub struct Script(());
 
     impl Script {
+        pub fn new() -> Script {
+            Script(())
+        }
+
         pub fn step<B, O>(self, context: &mut Context<O>, op: fold::Instruction<LevelSeed<B, O>>) -> Result<Instruction<B, O>, Error<O>>
         where O: Clone + Add<Output = O>,
         {
