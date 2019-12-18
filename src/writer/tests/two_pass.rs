@@ -208,22 +208,28 @@ mod markup {
         script.reverse();
 
         let mut blocks_counter = 0;
-        let mut fold_ctx = fold::Context::new(sketch);
-        let mut markup_ctx = two_pass::markup::Context::new();
+        let mut markup_ctx = two_pass::markup::Context::new(
+            fold::Context::new(plan::Context::new(sketch), sketch),
+        );
 
-        let plan_op = plan::Script::new()
-            .step(sketch);
-        let fold_op = fold::Script::new()
-            .step(&mut fold_ctx, plan_op).unwrap();
-        let mut markup_op = two_pass::markup::Script::new()
-            .step(&mut markup_ctx, fold_op).unwrap();
+        let mut kont = two_pass::markup::Script::boot();
         loop {
-            let kont = match markup_op {
+            let fold_op = match kont.fold_action {
+                two_pass::markup::FoldAction::Idle(fold_op) =>
+                    fold_op,
+                two_pass::markup::FoldAction::Step(fold::Continue { plan_action: fold::PlanAction::Idle(plan_op), next, }) =>
+                    next.step(&mut markup_ctx.fold_ctx(), plan_op).unwrap(),
+                two_pass::markup::FoldAction::Step(fold::Continue { plan_action: fold::PlanAction::Step(plan_kont), next, }) => {
+                    let plan_op = plan_kont.next.step(markup_ctx.fold_ctx().plan_ctx());
+                    next.step(&mut markup_ctx.fold_ctx(), plan_op).unwrap()
+                },
+            };
+            kont = match kont.next.step(&mut markup_ctx, fold_op).unwrap() {
                 two_pass::markup::Instruction::Op(two_pass::markup::Op::InitialLevelSize(
                     two_pass::markup::InitialLevelSize { level_index, next, },
                 )) => {
                     assert_eq!(script.pop(), Some(Instr::InitialLevelSize { level_index, }));
-                    next.level_header_size(5, &mut fold_ctx).unwrap()
+                    next.level_header_size(5, &mut markup_ctx).unwrap()
                 },
                 two_pass::markup::Instruction::Op(two_pass::markup::Op::AllocBlock(
                     two_pass::markup::AllocBlock { level_index, block_index, next, },
@@ -231,36 +237,28 @@ mod markup {
                     assert_eq!(script.pop(), Some(Instr::AllocMarkupBlock { level_index, block_index, }));
                     let index = blocks_counter;
                     blocks_counter += 1;
-                    next.block_ready(AllocBlock { index, items: 0, }, &mut fold_ctx).unwrap()
+                    next.block_ready(AllocBlock { index, items: 0, }, &mut markup_ctx).unwrap()
                 },
                 two_pass::markup::Instruction::Op(two_pass::markup::Op::WriteItem(
                     two_pass::markup::WriteItem { level_index, block_index, block_item_index, block, child_pending, next, },
                 )) => {
                     assert_eq!(script.pop(), Some(Instr::WriteMarkupItem { level_index, block_index, block_item_index, block, child_pending, }));
-                    next.item_written(AllocBlock { items: block.items + 1, ..block }, &mut markup_ctx, &mut fold_ctx).unwrap()
+                    next.item_written(AllocBlock { items: block.items + 1, ..block }, &mut markup_ctx).unwrap()
                 },
                 two_pass::markup::Instruction::Op(two_pass::markup::Op::FinishBlock(
                     two_pass::markup::FinishBlock { level_index, block_index, block, next, },
                 )) => {
                     assert_eq!(script.pop(), Some(Instr::FinishMarkupBlock { level_index, block_index, block, }));
-                    next.block_finished(block.items, &mut markup_ctx, &mut fold_ctx).unwrap()
+                    next.block_finished(block.items, &mut markup_ctx).unwrap()
                 },
-                two_pass::markup::Instruction::Done(done) => {
-                    assert_eq!(script.pop(), Some(Instr::Done(done.finish(fold_ctx).collect())));
+                two_pass::markup::Instruction::Done => {
+                    assert_eq!(script.pop(), Some(Instr::Done(
+                        markup_ctx.into_level_coords_iter()
+                            .collect(),
+                    )));
                     break;
                 },
             };
-            let fold_op = match kont.fold_action {
-                two_pass::markup::FoldAction::Idle(fold_op) =>
-                    fold_op,
-                two_pass::markup::FoldAction::Step(fold::Continue { plan_action: fold::PlanAction::Idle(plan_op), next, }) =>
-                    next.step(&mut fold_ctx, plan_op).unwrap(),
-                two_pass::markup::FoldAction::Step(fold::Continue { plan_action: fold::PlanAction::Step(plan_script), next, }) => {
-                    let plan_op = plan_script.step(sketch);
-                    next.step(&mut fold_ctx, plan_op).unwrap()
-                },
-            };
-            markup_op = kont.next.step(&mut markup_ctx, fold_op).unwrap();
         }
     }
 }
@@ -284,18 +282,27 @@ mod write {
     pub fn interpret<I>(sketch: &sketch::Tree, levels_coords: I, mut script: Vec<Instr>) where I: Iterator<Item = two_pass::LevelCoords<usize>>{
         script.reverse();
 
-        let mut fold_ctx = fold::Context::new(sketch);
         let mut write_ctx =
-            two_pass::write::Context::new(1000, 3, levels_coords).unwrap();
+            two_pass::write::Context::new(
+                fold::Context::new(plan::Context::new(sketch), sketch),
+                1000,
+                3,
+                levels_coords,
+            ).unwrap();
 
-        let plan_op = plan::Script::new()
-            .step(sketch);
-        let fold_op = fold::Script::new()
-            .step(&mut fold_ctx, plan_op).unwrap();
-        let mut write_op = two_pass::write::Script::new()
-            .step(&mut write_ctx, fold_op).unwrap();
+        let mut kont = two_pass::write::Script::boot();
         loop {
-            let kont = match write_op {
+            let fold_op = match kont.fold_action {
+                two_pass::write::FoldAction::Idle(fold_op) =>
+                    fold_op,
+                two_pass::write::FoldAction::Step(fold::Continue { plan_action: fold::PlanAction::Idle(plan_op), next, }) =>
+                    next.step(write_ctx.fold_ctx(), plan_op).unwrap(),
+                two_pass::write::FoldAction::Step(fold::Continue { plan_action: fold::PlanAction::Step(plan_kont), next, }) => {
+                    let plan_op = plan_kont.next.step(write_ctx.fold_ctx().plan_ctx());
+                    next.step(write_ctx.fold_ctx(), plan_op).unwrap()
+                },
+            };
+            kont = match kont.next.step(&mut write_ctx, fold_op).unwrap() {
                 two_pass::write::Instruction::Op(two_pass::write::Op::WriteTreeHeader(
                     two_pass::write::WriteTreeHeader { tree_offset, tree_header_size, tree_total_size, next, },
                 )) => {
@@ -306,42 +313,31 @@ mod write {
                     two_pass::write::WriteLevelHeader { level_index, level_offset, next, },
                 )) => {
                     assert_eq!(script.pop(), Some(Instr::WriteLevelHeader { level_index, level_offset, }));
-                    next.level_header_written(5, &mut fold_ctx).unwrap()
+                    next.level_header_written(5, &mut write_ctx).unwrap()
                 },
                 two_pass::write::Instruction::Op(two_pass::write::Op::WriteBlockHeader(
                     two_pass::write::WriteBlockHeader { level_index, block_index, block_offset, next, },
                 )) => {
                     assert_eq!(script.pop(), Some(Instr::WriteBlockHeader { level_index, block_index, block_offset, }));
-                    next.block_header_written(BlockMeta, 0, &mut fold_ctx).unwrap()
+                    next.block_header_written(BlockMeta, 0, &mut write_ctx).unwrap()
                 },
                 two_pass::write::Instruction::Op(two_pass::write::Op::WriteItem(
                     two_pass::write::WriteItem { level_index, block_index, block_item_index, block_meta: BlockMeta, child_block_offset, next, },
                 )) => {
                     assert_eq!(script.pop(), Some(Instr::WriteItem { level_index, block_index, block_item_index, child_block_offset, }));
-                    next.item_written(BlockMeta, 1, &mut write_ctx, &mut fold_ctx).unwrap()
+                    next.item_written(BlockMeta, 1, &mut write_ctx).unwrap()
                 },
                 two_pass::write::Instruction::Op(two_pass::write::Op::FlushBlock(
                     two_pass::write::FlushBlock { level_index, block_index, block_meta: BlockMeta, block_start_offset, block_end_offset, next, },
                 )) => {
                     assert_eq!(script.pop(), Some(Instr::FlushBlock { level_index, block_index, block_start_offset, block_end_offset, }));
-                    next.block_flushed(block_end_offset - block_start_offset, &mut write_ctx, &mut fold_ctx).unwrap()
+                    next.block_flushed(block_end_offset - block_start_offset, &mut write_ctx).unwrap()
                 },
                 two_pass::write::Instruction::Done => {
                     assert_eq!(script.pop(), Some(Instr::Done));
                     break;
                 },
             };
-            let fold_op = match kont.fold_action {
-                two_pass::write::FoldAction::Idle(fold_op) =>
-                    fold_op,
-                two_pass::write::FoldAction::Step(fold::Continue { plan_action: fold::PlanAction::Idle(plan_op), next, }) =>
-                    next.step(&mut fold_ctx, plan_op).unwrap(),
-                two_pass::write::FoldAction::Step(fold::Continue { plan_action: fold::PlanAction::Step(plan_script), next, }) => {
-                    let plan_op = plan_script.step(sketch);
-                    next.step(&mut fold_ctx, plan_op).unwrap()
-                },
-            };
-            write_op = kont.next.step(&mut write_ctx, fold_op).unwrap();
         }
     }
 }

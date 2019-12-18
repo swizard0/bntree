@@ -12,7 +12,7 @@ pub mod markup {
 
     pub enum Instruction<B, O> {
         Op(Op<B, O>),
-        Done(Done),
+        Done,
     }
 
     pub enum Op<B, O> {
@@ -42,26 +42,37 @@ pub mod markup {
         NoActiveBlockWhileBlockFinish,
     }
 
-    pub struct Context {
+    pub struct Context<B, O> {
+        fold_ctx: fold::Context<LevelSeed<B, O>>,
         child_pending: bool,
     }
 
-    impl Context {
-        pub fn new() -> Context {
+    impl<B, O> Context<B, O> {
+        pub fn new(fold_ctx: fold::Context<LevelSeed<B, O>>) -> Context<B, O> {
             Context {
+                fold_ctx,
                 child_pending: false,
             }
+        }
+
+        pub fn fold_ctx(&mut self) -> &mut fold::Context<LevelSeed<B, O>> {
+            &mut self.fold_ctx
         }
     }
 
     pub struct Script(());
 
     impl Script {
-        pub fn new() -> Script {
-            Script(())
+        pub fn boot<B, O>() -> Continue<B, O> {
+            Continue {
+                fold_action: FoldAction::Step(
+                    fold::Script::boot(),
+                ),
+                next: Script(()),
+            }
         }
 
-        pub fn step<B, O>(self, context: &mut Context, op: fold::Instruction<LevelSeed<B, O>>) -> Result<Instruction<B, O>, Error> {
+        pub fn step<B, O>(self, context: &mut Context<B, O>, op: fold::Instruction<LevelSeed<B, O>>) -> Result<Instruction<B, O>, Error> {
             match op {
                 fold::Instruction::Op(fold::Op::VisitLevel(fold::VisitLevel { level_index, next, })) =>
                     Ok(Instruction::Op(Op::InitialLevelSize(InitialLevelSize {
@@ -118,7 +129,7 @@ pub mod markup {
                         Err(Error::NoActiveBlockWhileBlockFinish)
                     },
                 fold::Instruction::Done =>
-                    Ok(Instruction::Done(Done(()))),
+                    Ok(Instruction::Done),
             }
         }
     }
@@ -141,12 +152,7 @@ pub mod markup {
     }
 
     impl InitialLevelSizeNext {
-        pub fn level_header_size<B, O>(
-            self,
-            level_header_size: O,
-            fold_ctx: &mut fold::Context<LevelSeed<B, O>>,
-        )
-            -> Result<Continue<B, O>, Error>
+        pub fn level_header_size<B, O>(self, level_header_size: O, context: &mut Context<B, O>) -> Result<Continue<B, O>, Error>
         where O: Clone
         {
             let fold_continue = self
@@ -156,7 +162,7 @@ pub mod markup {
                         level_header_size,
                         active_block: None,
                     },
-                    fold_ctx,
+                    context.fold_ctx(),
                 )
                 .map_err(Error::LevelHeaderSize)?;
             Ok(Continue {
@@ -180,12 +186,7 @@ pub mod markup {
     }
 
     impl<B, O> AllocBlockNext<B, O> {
-        pub fn block_ready(
-            self,
-            block: B,
-            fold_ctx: &mut fold::Context<LevelSeed<B, O>>,
-        )
-            -> Result<Continue<B, O>, Error>
+        pub fn block_ready(self, block: B, context: &mut Context<B, O>) -> Result<Continue<B, O>, Error>
         where O: Add<Output = O>
         {
             let fold_continue = self
@@ -194,7 +195,7 @@ pub mod markup {
                         active_block: Some(block),
                         ..self.level_seed
                     },
-                    fold_ctx,
+                    context.fold_ctx(),
                 )
                 .map_err(Error::LevelHeaderSize)?;
             Ok(Continue {
@@ -221,21 +222,14 @@ pub mod markup {
     }
 
     impl<B, O> WriteItemNext<B, O> {
-        pub fn item_written(
-            self,
-            block: B,
-            context: &mut Context,
-            fold_ctx: &mut fold::Context<LevelSeed<B, O>>,
-        )
-            -> Result<Continue<B, O>, Error>
-        {
+        pub fn item_written(self, block: B, context: &mut Context<B, O>) -> Result<Continue<B, O>, Error> {
             let fold_continue = self
                 .fold_next.item_ready(
                     LevelSeed {
                         active_block: Some(block),
                         ..self.level_seed
                     },
-                    fold_ctx,
+                    context.fold_ctx(),
                 )
                 .map_err(Error::WriteItem)?;
             context.child_pending = false;
@@ -261,13 +255,7 @@ pub mod markup {
     }
 
     impl<B, O> FinishBlockNext<B, O> {
-        pub fn block_finished(
-            self,
-            block_size: O,
-            context: &mut Context,
-            fold_ctx: &mut fold::Context<LevelSeed<B, O>>,
-        )
-            -> Result<Continue<B, O>, Error>
+        pub fn block_finished(self, block_size: O, context: &mut Context<B, O>) -> Result<Continue<B, O>, Error>
         where O: Add<Output = O>,
         {
             let fold_continue = self
@@ -277,7 +265,7 @@ pub mod markup {
                         level_size: self.level_seed.level_size + block_size,
                         ..self.level_seed
                     },
-                    fold_ctx,
+                    context.fold_ctx(),
                 )
                 .map_err(Error::FinishBlock)?;
             context.child_pending = true;
@@ -288,12 +276,12 @@ pub mod markup {
         }
     }
 
-    pub struct Done(());
 
-    impl Done {
-        pub fn finish<B, O>(self, fold_ctx: fold::Context<LevelSeed<B, O>>) -> impl Iterator<Item = super::LevelCoords<O>> {
-            fold_ctx
-                .levels_iter()
+    impl<B, O> Context<B, O> {
+        pub fn into_level_coords_iter(self) -> impl Iterator<Item = super::LevelCoords<O>> {
+            let (_plan_ctx, fold_iter) =
+                self.fold_ctx.into_levels_iter();
+            fold_iter
                 .map(|(index, LevelSeed { level_header_size, level_size, .. })| {
                     super::LevelCoords {
                         index,
@@ -355,7 +343,8 @@ pub mod write {
         FlushBlock(fold::Error),
     }
 
-    pub struct Context<O> {
+    pub struct Context<B, O> {
+        fold_ctx: fold::Context<LevelSeed<B, O>>,
         tree_offset: O,
         tree_header_size: O,
         tree_header_written: bool,
@@ -364,12 +353,19 @@ pub mod write {
         levels_cdr: Vec<LevelCoords<O>>,
     }
 
-    impl<O> Context<O> {
-        pub fn new<I>(tree_offset: O, tree_header_size: O, mut levels_coords: I) -> Result<Context<O>, Error<O>>
+    impl<B, O> Context<B, O> {
+        pub fn new<I>(
+            fold_ctx: fold::Context<LevelSeed<B, O>>,
+            tree_offset: O,
+            tree_header_size: O,
+            mut levels_coords: I,
+        )
+            -> Result<Context<B, O>, Error<O>>
         where I: Iterator<Item = LevelCoords<O>>
         {
             if let Some(levels_car) = levels_coords.next() {
                 Ok(Context {
+                    fold_ctx,
                     tree_offset,
                     tree_header_size,
                     tree_header_written: false,
@@ -381,16 +377,25 @@ pub mod write {
                 Err(Error::LevelsCoordsEmpty)
             }
         }
+
+        pub fn fold_ctx(&mut self) -> &mut fold::Context<LevelSeed<B, O>> {
+            &mut self.fold_ctx
+        }
     }
 
     pub struct Script(());
 
     impl Script {
-        pub fn new() -> Script {
-            Script(())
+        pub fn boot<B, O>() -> Continue<B, O> {
+            Continue {
+                fold_action: FoldAction::Step(
+                    fold::Script::boot(),
+                ),
+                next: Script(()),
+            }
         }
 
-        pub fn step<B, O>(self, context: &mut Context<O>, op: fold::Instruction<LevelSeed<B, O>>) -> Result<Instruction<B, O>, Error<O>>
+        pub fn step<B, O>(self, context: &mut Context<B, O>, op: fold::Instruction<LevelSeed<B, O>>) -> Result<Instruction<B, O>, Error<O>>
         where O: Clone + Add<Output = O>,
         {
             if !context.tree_header_written {
@@ -522,12 +527,7 @@ pub mod write {
     }
 
     impl<B, O> WriteTreeHeaderNext<B, O> {
-        pub fn tree_header_written(
-            self,
-            written: O,
-            context: &mut Context<O>,
-        )
-            -> Result<Continue<B, O>, Error<O>>
+        pub fn tree_header_written(self, written: O, context: &mut Context<B, O>) -> Result<Continue<B, O>, Error<O>>
         where O: Clone + PartialEq,
         {
             if written != context.tree_header_size {
@@ -559,12 +559,7 @@ pub mod write {
     }
 
     impl<B, O> WriteLevelHeaderNext<B, O> {
-        pub fn level_header_written(
-            self,
-            written: O,
-            fold_ctx: &mut fold::Context<LevelSeed<B, O>>,
-        )
-            -> Result<Continue<B, O>, Error<O>>
+        pub fn level_header_written(self, written: O, context: &mut Context<B, O>) -> Result<Continue<B, O>, Error<O>>
         where O: PartialEq
         {
             if written != self.level_seed.level_header_size {
@@ -574,7 +569,7 @@ pub mod write {
                 });
             }
             let fold_continue = self
-                .fold_next.level_ready(self.level_seed, fold_ctx)
+                .fold_next.level_ready(self.level_seed, context.fold_ctx())
                 .map_err(Error::WriteLevelHeader)?;
             Ok(Continue {
                 fold_action: FoldAction::Step(fold_continue),
@@ -598,19 +593,13 @@ pub mod write {
     }
 
     impl<B, O> WriteBlockHeaderNext<B, O> {
-        pub fn block_header_written(
-            mut self,
-            block_meta: B,
-            written: O,
-            fold_ctx: &mut fold::Context<LevelSeed<B, O>>,
-        )
-            -> Result<Continue<B, O>, Error<O>>
+        pub fn block_header_written(mut self, block_meta: B, written: O, context: &mut Context<B, O>) -> Result<Continue<B, O>, Error<O>>
         where O: Add<Output = O>,
         {
             self.level_seed.cursor = self.level_seed.cursor + written;
             self.level_seed.active_block = Some(block_meta);
             let fold_continue = self
-                .fold_next.block_ready(self.level_seed, fold_ctx)
+                .fold_next.block_ready(self.level_seed, context.fold_ctx())
                 .map_err(Error::WriteBlockHeader)?;
             Ok(Continue {
                 fold_action: FoldAction::Step(fold_continue),
@@ -636,20 +625,13 @@ pub mod write {
     }
 
     impl<B, O> WriteItemNext<B, O> {
-        pub fn item_written(
-            mut self,
-            block_meta: B,
-            written: O,
-            context: &mut Context<O>,
-            fold_ctx: &mut fold::Context<LevelSeed<B, O>>,
-        )
-            -> Result<Continue<B, O>, Error<O>>
+        pub fn item_written(mut self, block_meta: B, written: O, context: &mut Context<B, O>) -> Result<Continue<B, O>, Error<O>>
         where O: Add<Output = O>,
         {
             self.level_seed.cursor = self.level_seed.cursor + written;
             self.level_seed.active_block = Some(block_meta);
             let fold_continue = self
-                .fold_next.item_ready(self.level_seed, fold_ctx)
+                .fold_next.item_ready(self.level_seed, context.fold_ctx())
                 .map_err(Error::WriteItem)?;
             context.recent_block_offset = None;
             Ok(Continue {
@@ -676,20 +658,14 @@ pub mod write {
     }
 
     impl<B, O> FlushBlockNext<B, O> {
-        pub fn block_flushed(
-            mut self,
-            actual_block_size: O,
-            context: &mut Context<O>,
-            fold_ctx: &mut fold::Context<LevelSeed<B, O>>,
-        )
-            -> Result<Continue<B, O>, Error<O>>
+        pub fn block_flushed(mut self, actual_block_size: O, context: &mut Context<B, O>) -> Result<Continue<B, O>, Error<O>>
         where O: Clone + Add<Output = O>,
         {
             context.recent_block_offset =
                 Some(self.level_seed.block_offset.clone());
             self.level_seed.block_offset = self.level_seed.block_offset + actual_block_size;
             let fold_continue = self
-                .fold_next.block_flushed(self.level_seed, fold_ctx)
+                .fold_next.block_flushed(self.level_seed, context.fold_ctx())
                 .map_err(Error::FlushBlock)?;
             Ok(Continue {
                 fold_action: FoldAction::Step(fold_continue),

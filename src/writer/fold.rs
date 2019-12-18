@@ -96,6 +96,10 @@ impl<S> Context<S> {
                 .collect(),
         }
     }
+
+    pub fn plan_ctx(&mut self) -> &mut plan::Context {
+        &mut self.plan_ctx
+    }
 }
 
 enum LevelState<S> {
@@ -377,10 +381,6 @@ impl VisitBlockFinishNext {
 
 
 impl<S> Context<S> {
-    pub fn plan_ctx(&mut self) -> &mut plan::Context {
-        &mut self.plan_ctx
-    }
-
     pub fn into_levels_iter(self) -> (plan::Context, impl Iterator<Item = (usize, S)>) {
         (
             self.plan_ctx,
