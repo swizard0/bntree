@@ -17,13 +17,20 @@ fn tree17_3() {
 }
 
 fn interpret_fold_count_items(sketch: &sketch::Tree) -> Vec<(usize, usize)> {
-    let mut fold_ctx = fold::Context::new(sketch);
-    let plan_op = plan::Script::new()
-        .step(sketch);
-    let mut fold_op = fold::Script::new()
-        .step(&mut fold_ctx, plan_op).unwrap();
+    let mut fold_ctx = fold::Context::new(
+        plan::Context::new(sketch),
+        sketch,
+    );
+
+    let mut kont = fold::Script::boot();
     loop {
-        let kont = match fold_op {
+        let plan_op = match kont.plan_action {
+            fold::PlanAction::Idle(plan_op) =>
+                plan_op,
+            fold::PlanAction::Step(plan::Continue { next: plan_script, }) =>
+                plan_script.step(fold_ctx.plan_ctx()),
+        };
+        kont = match kont.next.step(&mut fold_ctx, plan_op).unwrap() {
             fold::Instruction::Op(fold::Op::VisitLevel(fold::VisitLevel { next, .. })) =>
                 next.level_ready(0, &mut fold_ctx).unwrap(),
             fold::Instruction::Op(fold::Op::VisitBlockStart(fold::VisitBlockStart { level_seed, next, .. })) =>
@@ -32,15 +39,11 @@ fn interpret_fold_count_items(sketch: &sketch::Tree) -> Vec<(usize, usize)> {
                 next.item_ready(level_seed + 1, &mut fold_ctx).unwrap(),
             fold::Instruction::Op(fold::Op::VisitBlockFinish(fold::VisitBlockFinish { level_seed, next, .. })) =>
                 next.block_flushed(level_seed, &mut fold_ctx).unwrap(),
-            fold::Instruction::Done =>
-                return fold_ctx.levels_iter().collect(),
+            fold::Instruction::Done => {
+                let (_plan_ctx, fold_iter) =
+                    fold_ctx.into_levels_iter();
+                return fold_iter.collect();
+            },
         };
-        let plan_op = match kont.plan_action {
-            fold::PlanAction::Idle(plan_op) =>
-                plan_op,
-            fold::PlanAction::Step(plan_script) =>
-                plan_script.step(sketch),
-        };
-        fold_op = kont.next.step(&mut fold_ctx, plan_op).unwrap();
     }
 }

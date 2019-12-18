@@ -89,13 +89,13 @@ enum Instruction {
 fn interpret_script(sketch: &sketch::Tree, mut script: Vec<Instruction>) {
     script.reverse();
 
-    let mut context = plan::Context::new(sketch);
+    let mut plan_ctx = plan::Context::new(sketch);
     let mut kont = plan::Script::boot();
 
     assert_eq!(script.pop(), Some(Instruction::TreeStart));
     loop {
         use plan::{Perform, Op};
-        match kont.next.step(&mut context) {
+        match kont.next.step(&mut plan_ctx) {
             plan::Instruction::Perform(Perform { op: Op::BlockStart, level_index, block_index, next, }) => {
                 assert_eq!(script.pop(), Some(Instruction::BlockStart { level_index, block_index, }));
                 kont = next;

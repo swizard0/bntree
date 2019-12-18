@@ -22,7 +22,7 @@ pub struct Continue {
 
 pub enum PlanAction {
     Idle(plan::Instruction),
-    Step(plan::Script),
+    Step(plan::Continue),
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -81,12 +81,14 @@ pub enum Error {
 pub struct Script(());
 
 pub struct Context<S> {
+    plan_ctx: plan::Context,
     levels: Vec<Option<LevelState<S>>>,
 }
 
 impl<S> Context<S> {
-    pub fn new<'s>(sketch: &'s sketch::Tree) -> Context<S> {
+    pub fn new(plan_ctx: plan::Context, sketch: &sketch::Tree) -> Context<S> {
         Context {
+            plan_ctx,
             levels: sketch
                 .levels()
                 .iter()
@@ -110,10 +112,14 @@ enum LevelState<S> {
     },
 }
 
-
 impl Script {
-    pub fn new() -> Script {
-        Script(())
+    pub fn boot() -> Continue {
+        Continue {
+            plan_action: PlanAction::Step(
+                plan::Script::boot(),
+            ),
+            next: Script(()),
+        }
     }
 
     pub fn step<S>(self, context: &mut Context<S>, op: plan::Instruction) -> Result<Instruction<S>, Error> {
@@ -130,7 +136,12 @@ impl Script {
                             next: VisitLevelNext {
                                 level_index,
                                 script: self,
-                                plan_next: next,
+                                plan_next: plan::Instruction::Perform(plan::Perform {
+                                    op: plan::Op::BlockStart,
+                                    level_index: level_index,
+                                    block_index: block_index,
+                                    next,
+                                }),
                             },
                         }))),
                     Some(Some(LevelState::Bootstrap)) =>
@@ -250,7 +261,7 @@ pub struct VisitLevel {
 pub struct VisitLevelNext {
     level_index: usize,
     script: Script,
-    plan_next: plan::Script,
+    plan_next: plan::Instruction,
 }
 
 impl VisitLevelNext {
@@ -262,12 +273,7 @@ impl VisitLevelNext {
         }
         *state = Some(LevelState::SeenVisitLevel { level_seed, });
         Ok(Continue {
-            plan_action: PlanAction::Idle(plan::Instruction::Perform(plan::Perform {
-                op: plan::Op::BlockStart,
-                level_index: self.level_index,
-                block_index: 0,
-                next: self.plan_next,
-            })),
+            plan_action: PlanAction::Idle(self.plan_next),
             next: self.script,
         })
     }
@@ -285,7 +291,7 @@ pub struct VisitBlockStartNext {
     level_index: usize,
     block_index: usize,
     script: Script,
-    plan_next: plan::Script,
+    plan_next: plan::Continue,
 }
 
 impl VisitBlockStartNext {
@@ -319,7 +325,7 @@ pub struct VisitItemNext {
     level_index: usize,
     block_index: usize,
     script: Script,
-    plan_next: plan::Script,
+    plan_next: plan::Continue,
 }
 
 impl VisitItemNext {
@@ -351,7 +357,7 @@ pub struct VisitBlockFinish<S> {
 pub struct VisitBlockFinishNext {
     level_index: usize,
     script: Script,
-    plan_next: plan::Script,
+    plan_next: plan::Continue,
 }
 
 impl VisitBlockFinishNext {
@@ -371,16 +377,23 @@ impl VisitBlockFinishNext {
 
 
 impl<S> Context<S> {
-    pub fn levels_iter(self) -> impl Iterator<Item = (usize, S)> {
-        self.levels
-            .into_iter()
-            .enumerate()
-            .filter_map(|(level_index, fold_level)| {
-                if let Some(LevelState::SeenVisitBlockFinish { level_seed, }) = fold_level {
-                    Some((level_index, level_seed))
-                } else {
-                    None
-                }
-            })
+    pub fn plan_ctx(&mut self) -> &mut plan::Context {
+        &mut self.plan_ctx
+    }
+
+    pub fn into_levels_iter(self) -> (plan::Context, impl Iterator<Item = (usize, S)>) {
+        (
+            self.plan_ctx,
+            self.levels
+                .into_iter()
+                .enumerate()
+                .filter_map(|(level_index, fold_level)| {
+                    if let Some(LevelState::SeenVisitBlockFinish { level_seed, }) = fold_level {
+                        Some((level_index, level_seed))
+                    } else {
+                        None
+                    }
+                })
+        )
     }
 }
