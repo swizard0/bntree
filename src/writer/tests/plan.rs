@@ -89,27 +89,26 @@ enum Instruction {
 fn interpret_script(sketch: &sketch::Tree, mut script: Vec<Instruction>) {
     script.reverse();
 
-    let mut instr = plan::Script::new()
-        .step(sketch);
-    assert_eq!(script.pop(), Some(Instruction::TreeStart));
+    let mut context = plan::Context::new(sketch);
+    let mut kont = plan::Script::boot();
 
+    assert_eq!(script.pop(), Some(Instruction::TreeStart));
     loop {
         use plan::{Perform, Op};
-
-        match instr {
+        match kont.next.step(&mut context) {
             plan::Instruction::Perform(Perform { op: Op::BlockStart, level_index, block_index, next, }) => {
                 assert_eq!(script.pop(), Some(Instruction::BlockStart { level_index, block_index, }));
-                instr = next.step(sketch);
+                kont = next;
             },
             plan::Instruction::Perform(
                 Perform { op: Op::BlockItem { index: item_index, }, level_index, block_index, next, },
             ) => {
                 assert_eq!(script.pop(), Some(Instruction::WriteItem { level_index, block_index, item_index, }));
-                instr = next.step(sketch);
+                kont = next;
             },
             plan::Instruction::Perform(Perform { op: Op::BlockFinish, level_index, block_index, next, }) => {
                 assert_eq!(script.pop(), Some(Instruction::BlockFinish { level_index, block_index, }));
-                instr = next.step(sketch);
+                kont = next;
             },
             plan::Instruction::Done => {
                 assert_eq!(script.pop(), Some(Instruction::Done));

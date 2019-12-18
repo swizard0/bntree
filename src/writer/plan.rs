@@ -9,7 +9,7 @@ pub struct Perform {
     pub op: Op,
     pub level_index: usize,
     pub block_index: usize,
-    pub next: Script,
+    pub next: Continue,
 }
 
 pub enum Op {
@@ -18,17 +18,15 @@ pub enum Op {
     BlockFinish,
 }
 
-pub struct Script {
-    inner: Fsm,
+pub struct Continue {
+    pub next: Script,
 }
 
-enum Fsm {
-    Init,
-    Busy(Busy),
-}
+pub struct Script(());
 
-struct Busy {
+pub struct Context {
     cursors: Vec<LevelCursor>,
+    block_size: usize,
     level_curr: usize,
     level_base: usize,
 }
@@ -45,51 +43,43 @@ enum BlockCursor {
     Write { index: usize, },
 }
 
-impl Script {
-    pub fn new() -> Script {
-        Script { inner: Fsm::Init, }
-    }
-
-    pub fn step(self, sketch: &sketch::Tree) -> Instruction {
-        match self.inner {
-            Fsm::Init =>
-                Busy {
-                    cursors: sketch
-                        .levels()
-                        .iter()
-                        .rev()
-                        .map(|level| LevelCursor {
-                            level_index: level.index,
-                            block_index: 0,
-                            block_cursor: BlockCursor::Start,
-                            items_remain: level.items_count,
-                        })
-                        .collect(),
-                    level_curr: 0,
-                    level_base: 0,
-                },
-            Fsm::Busy(busy) =>
-                busy,
-        }.step(sketch)
+impl Context {
+    pub fn new(sketch: &sketch::Tree) -> Context {
+        Context {
+            cursors: sketch
+                .levels()
+                .iter()
+                .rev()
+                .map(|level| LevelCursor {
+                    level_index: level.index,
+                    block_index: 0,
+                    block_cursor: BlockCursor::Start,
+                    items_remain: level.items_count,
+                })
+                .collect(),
+            block_size: sketch.block_size(),
+            level_curr: 0,
+            level_base: 0,
+        }
     }
 }
 
-impl Busy {
-    fn step(mut self, sketch: &sketch::Tree) -> Instruction {
-        if self.level_curr < self.cursors.len() {
-            let cursor = &mut self.cursors[self.level_curr];
+impl Script {
+    pub fn boot() -> Continue {
+        Continue { next: Script(()), }
+    }
+
+    pub fn step(self, context: &mut Context) -> Instruction {
+        if context.level_curr < context.cursors.len() {
+            let cursor = &mut context.cursors[context.level_curr];
             if cursor.items_remain == 0 {
+                context.level_base += 1;
+                context.level_curr = context.level_base;
                 return Instruction::Perform(Perform {
                     op: Op::BlockFinish,
                     level_index: cursor.level_index,
                     block_index: cursor.block_index,
-                    next: Script {
-                        inner: Fsm::Busy(Busy {
-                            level_base: self.level_base + 1,
-                            level_curr: self.level_base + 1,
-                            ..self
-                        }),
-                    },
+                    next: Continue { next: self, },
                 });
             }
             match cursor.block_cursor {
@@ -99,28 +89,30 @@ impl Busy {
                         op: Op::BlockStart,
                         level_index: cursor.level_index,
                         block_index: cursor.block_index,
-                        next: Script { inner: Fsm::Busy(self), },
+                        next: Continue { next: self, },
                     });
                 },
-                BlockCursor::Write { index, } if index < sketch.block_size() => {
+                BlockCursor::Write { index, } if index < context.block_size => {
                     cursor.block_cursor = BlockCursor::Write { index: index + 1, };
                     cursor.items_remain -= 1;
+                    context.level_curr = context.level_base;
                     return Instruction::Perform(Perform {
                         op: Op::BlockItem { index, },
                         level_index: cursor.level_index,
                         block_index: cursor.block_index,
-                        next: Script { inner: Fsm::Busy(Busy { level_curr: self.level_base, ..self }) },
+                        next: Continue { next: self, },
                     });
                 },
                 BlockCursor::Write { .. } => {
                     cursor.block_cursor = BlockCursor::Start;
                     let block_index = cursor.block_index;
                     cursor.block_index += 1;
+                    context.level_curr += 1;
                     return Instruction::Perform(Perform {
                         op: Op::BlockFinish,
                         level_index: cursor.level_index,
                         block_index,
-                        next: Script { inner: Fsm::Busy(Busy { level_curr: self.level_curr + 1, ..self }), },
+                        next: Continue { next: self, },
                     });
                 },
             }
