@@ -225,8 +225,8 @@ mod markup {
                 },
             };
             kont = match kont.next.step(&mut markup_ctx, fold_op).unwrap() {
-                two_pass::markup::Instruction::Op(two_pass::markup::Op::InitialLevelSize(
-                    two_pass::markup::InitialLevelSize { level_index, next, },
+                two_pass::markup::Instruction::Op(two_pass::markup::Op::LevelHeaderSize(
+                    two_pass::markup::LevelHeaderSize { level_index, next, },
                 )) => {
                     assert_eq!(script.pop(), Some(Instr::InitialLevelSize { level_index, }));
                     next.level_header_size(5, &mut markup_ctx).unwrap()

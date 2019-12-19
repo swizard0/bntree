@@ -16,7 +16,7 @@ pub mod markup {
     }
 
     pub enum Op<B, O> {
-        InitialLevelSize(InitialLevelSize),
+        LevelHeaderSize(LevelHeaderSize),
         AllocBlock(AllocBlock<B, O>),
         WriteItem(WriteItem<B, O>),
         FinishBlock(FinishBlock<B, O>),
@@ -75,9 +75,9 @@ pub mod markup {
         pub fn step<B, O>(self, context: &mut Context<B, O>, op: fold::Instruction<LevelSeed<B, O>>) -> Result<Instruction<B, O>, Error> {
             match op {
                 fold::Instruction::Op(fold::Op::VisitLevel(fold::VisitLevel { level_index, next, })) =>
-                    Ok(Instruction::Op(Op::InitialLevelSize(InitialLevelSize {
+                    Ok(Instruction::Op(Op::LevelHeaderSize(LevelHeaderSize {
                         level_index,
-                        next: InitialLevelSizeNext {
+                        next: LevelHeaderSizeNext {
                             script: self,
                             fold_next: next,
                         },
@@ -141,17 +141,17 @@ pub mod markup {
     }
 
 
-    pub struct InitialLevelSize {
+    pub struct LevelHeaderSize {
         pub level_index: usize,
-        pub next: InitialLevelSizeNext,
+        pub next: LevelHeaderSizeNext,
     }
 
-    pub struct InitialLevelSizeNext {
+    pub struct LevelHeaderSizeNext {
         script: Script,
         fold_next: fold::VisitLevelNext,
     }
 
-    impl InitialLevelSizeNext {
+    impl LevelHeaderSizeNext {
         pub fn level_header_size<B, O>(self, level_header_size: O, context: &mut Context<B, O>) -> Result<Continue<B, O>, Error>
         where O: Clone
         {
