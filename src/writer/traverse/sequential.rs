@@ -272,13 +272,13 @@ impl UnderlyingActionStep {
 }
 
 pub struct ActionMarkup<'a> {
-    context: &'a mut two_pass::markup::Context<BlockWriter, Offset>,
-    op: two_pass::markup::Instruction<BlockWriter, Offset>,
+    pub context: &'a mut two_pass::markup::Context<BlockWriter, Offset>,
+    pub op: two_pass::markup::Instruction<BlockWriter, Offset>,
 }
 
 pub struct ActionWrite<'a> {
-    context: &'a mut two_pass::write::Context<BlockWriter, Offset>,
-    op: two_pass::write::Instruction<BlockWriter, Offset>,
+    pub context: &'a mut two_pass::write::Context<BlockWriter, Offset>,
+    pub op: two_pass::write::Instruction<BlockWriter, Offset>,
 }
 
 
