@@ -12,6 +12,7 @@ pub enum Instruction<'ctx> {
 pub enum Op<'ctx> {
     MarkupStart(MarkupStart),
     WriteTreeHeader(WriteTreeHeader<'ctx>),
+    FinishTreeHeader(FinishTreeHeader<'ctx>),
 }
 
 pub struct Continue {
@@ -26,13 +27,13 @@ pub enum UnderlyingAction {
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Error {
-    InvalidContextRequestIncomplete,
     InvalidContextForStepMarkup,
     InvalidContextForStepWrite,
     InvalidContextModeForUnderlyingAction,
     InvalidContextMarkupStateForUnderlyingAction,
     InvalidContextWriteStateForUnderlyingAction,
     InvalidContextModeForWriteTreeHeader,
+    InvalidContextModeForFinishTreeHeader,
 }
 
 pub enum Pass<M, W> {
@@ -71,38 +72,34 @@ impl Script {
     }
 
     pub fn step<'ctx>(self, context: &'ctx mut Context, op: UnderlyingOp) -> Result<Instruction<'ctx>, Error> {
-        match mem::replace(&mut context.mode, Mode::None) {
+        match &mut context.mode {
             Mode::None =>
                 Ok(Instruction::Op(Op::MarkupStart(MarkupStart {
                     next: self,
                 }))),
 
-            Mode::TreeHeaderWait(Pass::Markup(ModeMarkupHeaderWait { markup_context, })) => {
-                context.mode = Mode::TreeHeaderWrite(Pass::Markup(ModeMarkupHeaderWrite {
-                    markup_context,
-                    active_block_writer: BlockWriter::new(
-                        context.available_blocks.pop().unwrap_or_else(Vec::new),
-                    ),
-                }));
+            Mode::TreeHeaderWrite(Pass::Markup(ModeMarkupHeaderWrite { markup_context, active_block_writer, })) =>
                 Ok(Instruction::Op(Op::WriteTreeHeader(WriteTreeHeader {
-                    block_writer: if let Mode::TreeHeaderWrite(
-                        Pass::Markup(ModeMarkupHeaderWrite { ref mut active_block_writer, .. }),
-                    ) = context.mode {
-                        active_block_writer
-                    } else {
-                        unreachable!()
-                    },
+                    block_writer: active_block_writer,
                     next: WriteTreeHeaderNext {
                         script: self,
                     },
-                })))
-            },
+                }))),
 
-            Mode::TreeHeaderWait(Pass::Write(ModeWriteHeaderWait)) =>
+            Mode::TreeHeaderWrite(Pass::Write(ModeWriteHeaderWrite)) =>
                 unimplemented!(),
 
-            Mode::TreeHeaderWrite(..) =>
-                Err(Error::InvalidContextRequestIncomplete),
+            Mode::TreeHeaderFinish(Pass::Markup(ModeMarkupHeaderFinish { markup_context, active_block, })) =>
+                Ok(Instruction::Op(Op::FinishTreeHeader(FinishTreeHeader {
+                    block: active_block,
+                    next: FinishTreeHeaderNext {
+                        script: self,
+                    },
+                }))),
+
+
+            Mode::TreeHeaderFinish(Pass::Write(ModeWriteHeaderFinish)) =>
+                unimplemented!(),
 
             Mode::Step(Pass::Markup(ModeMarkup { context, tree_header_size, })) =>
                 match op {
@@ -179,17 +176,10 @@ impl Script {
 
 enum Mode {
     None,
-    TreeHeaderWait(Pass<ModeMarkupHeaderWait, ModeWriteHeaderWait>),
     TreeHeaderWrite(Pass<ModeMarkupHeaderWrite, ModeWriteHeaderWrite>),
+    TreeHeaderFinish(Pass<ModeMarkupHeaderFinish, ModeWriteHeaderFinish>),
     Step(Pass<ModeMarkup, ModeWrite>),
 }
-
-
-struct ModeMarkupHeaderWait {
-    markup_context: two_pass::markup::Context<BlockWriter, Offset>,
-}
-
-struct ModeWriteHeaderWait;
 
 
 struct ModeMarkupHeaderWrite {
@@ -198,6 +188,14 @@ struct ModeMarkupHeaderWrite {
 }
 
 struct ModeWriteHeaderWrite;
+
+
+struct ModeMarkupHeaderFinish {
+    markup_context: two_pass::markup::Context<BlockWriter, Offset>,
+    active_block: Vec<u8>,
+}
+
+struct ModeWriteHeaderFinish;
 
 
 struct ModeMarkup {
@@ -272,7 +270,12 @@ pub struct MarkupStart {
 
 impl MarkupStart {
     pub fn created_context(self, markup_context: two_pass::markup::Context<BlockWriter, Offset>, context: &mut Context) -> Continue {
-        context.mode = Mode::TreeHeaderWait(Pass::Markup(ModeMarkupHeaderWait { markup_context, }));
+        context.mode = Mode::TreeHeaderWrite(Pass::Markup(ModeMarkupHeaderWrite {
+            markup_context,
+            active_block_writer: BlockWriter::new(
+                context.available_blocks.pop().unwrap_or_else(Vec::new),
+            ),
+        }));
         Continue {
             underlying_action: UnderlyingAction::Idle(UnderlyingOp(None)),
             next: self.next,
@@ -294,7 +297,37 @@ impl WriteTreeHeaderNext {
     pub fn tree_header_written(self, context: &mut Context) -> Result<Continue, Error> {
         match mem::replace(&mut context.mode, Mode::None) {
             Mode::TreeHeaderWrite(Pass::Markup(ModeMarkupHeaderWrite { markup_context, active_block_writer, })) => {
-                let block_memory = active_block_writer.into_inner();
+                context.mode = Mode::TreeHeaderFinish(Pass::Markup(ModeMarkupHeaderFinish {
+                    markup_context,
+                    active_block: active_block_writer.into_inner(),
+                }));
+                Ok(Continue {
+                    underlying_action: UnderlyingAction::Idle(UnderlyingOp(None)),
+                    next: self.script,
+                })
+            },
+            Mode::TreeHeaderWrite(Pass::Write(..)) =>
+                unimplemented!(),
+            _ =>
+                Err(Error::InvalidContextModeForWriteTreeHeader),
+        }
+    }
+}
+
+
+pub struct FinishTreeHeader<'ctx> {
+    pub block: &'ctx mut Vec<u8>,
+    pub next: FinishTreeHeaderNext,
+}
+
+pub struct FinishTreeHeaderNext {
+    script: Script,
+}
+
+impl FinishTreeHeaderNext {
+    pub fn tree_header_finished(self, context: &mut Context) -> Result<Continue, Error> {
+        match mem::replace(&mut context.mode, Mode::None) {
+            Mode::TreeHeaderFinish(Pass::Markup(ModeMarkupHeaderFinish { markup_context, active_block: block_memory, })) => {
                 let tree_header_size = block_memory.len();
                 context.mode = Mode::Step(Pass::Markup(ModeMarkup {
                     context: markup_context,
@@ -311,7 +344,7 @@ impl WriteTreeHeaderNext {
             Mode::TreeHeaderWrite(Pass::Write(..)) =>
                 unimplemented!(),
             _ =>
-                Err(Error::InvalidContextModeForWriteTreeHeader),
+                Err(Error::InvalidContextModeForFinishTreeHeader),
         }
     }
 }

@@ -74,6 +74,8 @@ fn tree17_4_markup() {
                     .unwrap();
                 write_tree_header.next.tree_header_written(&mut context).unwrap()
             },
+            sequential::Instruction::Op(sequential::Op::FinishTreeHeader(finish_tree_header)) =>
+                finish_tree_header.next.tree_header_finished(&mut context).unwrap(),
             sequential::Instruction::Done =>
                 break,
         }
