@@ -20,8 +20,41 @@ fn tree17_4_markup() {
                 underlying_op,
             sequential::UnderlyingAction::Step(underlying_step) =>
                 match underlying_step.action(&mut context).unwrap() {
-                    sequential::Pass::Markup(sequential::ActionMarkup { context, next, }) =>
-                        unimplemented!(),
+                    sequential::Pass::Markup(sequential::ActionMarkup {
+                        context: markup_ctx,
+                        next: two_pass::markup::Continue {
+                            fold_action: two_pass::markup::FoldAction::Idle(fold_op),
+                            next: markup_next,
+                        },
+                    }) =>
+                        markup_next.step(markup_ctx, fold_op).unwrap().into(),
+                    sequential::Pass::Markup(sequential::ActionMarkup {
+                        context: markup_ctx,
+                        next: two_pass::markup::Continue {
+                            fold_action: two_pass::markup::FoldAction::Step(fold::Continue {
+                                plan_action: fold::PlanAction::Idle(plan_op),
+                                next: fold_next,
+                            }),
+                            next: markup_next,
+                        },
+                    }) => {
+                        let fold_op = fold_next.step(markup_ctx.fold_ctx(), plan_op).unwrap();
+                        markup_next.step(markup_ctx, fold_op).unwrap().into()
+                    },
+                    sequential::Pass::Markup(sequential::ActionMarkup {
+                        context: markup_ctx,
+                        next: two_pass::markup::Continue {
+                            fold_action: two_pass::markup::FoldAction::Step(fold::Continue {
+                                plan_action: fold::PlanAction::Step(plan::Continue { next: plan_next, }),
+                                next: fold_next,
+                            }),
+                            next: markup_next,
+                        },
+                    }) => {
+                        let plan_op = plan_next.step(markup_ctx.fold_ctx().plan_ctx());
+                        let fold_op = fold_next.step(markup_ctx.fold_ctx(), plan_op).unwrap();
+                        markup_next.step(markup_ctx, fold_op).unwrap().into()
+                    },
                     sequential::Pass::Write(sequential::ActionWrite { context, next, }) =>
                         unimplemented!(),
                 },

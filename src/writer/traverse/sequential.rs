@@ -214,6 +214,18 @@ type InstructionWrite = two_pass::write::Instruction<BlockWriter, Offset>;
 
 pub struct UnderlyingOp(Option<Pass<InstructionMarkup, InstructionWrite>>);
 
+impl From<InstructionMarkup> for UnderlyingOp {
+    fn from(op: InstructionMarkup) -> Self {
+        UnderlyingOp(Some(Pass::Markup(op)))
+    }
+}
+
+impl From<InstructionWrite> for UnderlyingOp {
+    fn from(op: InstructionWrite) -> Self {
+        UnderlyingOp(Some(Pass::Write(op)))
+    }
+}
+
 pub struct UnderlyingActionStep(Pass<ContinueMarkup, ContinueWrite>);
 
 impl UnderlyingActionStep {
