@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use super::super::{
     plan,
     fold,
@@ -18,9 +20,9 @@ fn tree17_4_markup() {
                 underlying_op,
             sequential::UnderlyingAction::Step(underlying_step) =>
                 match underlying_step.action(&mut context).unwrap() {
-                    sequential::Pass::Markup(sequential::ActionMarkup { context, op, }) =>
+                    sequential::Pass::Markup(sequential::ActionMarkup { context, next, }) =>
                         unimplemented!(),
-                    sequential::Pass::Write(sequential::ActionWrite { context, op, }) =>
+                    sequential::Pass::Write(sequential::ActionWrite { context, next, }) =>
                         unimplemented!(),
                 },
         };
@@ -32,8 +34,13 @@ fn tree17_4_markup() {
                     ),
                     &mut context,
                 ),
-            sequential::Instruction::Op(sequential::Op::WriteTreeHeader(write_tree_header)) =>
-                unimplemented!(),
+            sequential::Instruction::Op(sequential::Op::WriteTreeHeader(write_tree_header)) => {
+                write_tree_header
+                    .block_writer
+                    .write_fmt(format_args!("tree header"))
+                    .unwrap();
+                write_tree_header.next.tree_header_written(&mut context).unwrap()
+            },
             sequential::Instruction::Done =>
                 break,
         }
