@@ -24,13 +24,7 @@ fn interpret_fold_count_items(sketch: &sketch::Tree) -> Vec<(usize, usize)> {
 
     let mut kont = fold::Script::boot();
     loop {
-        let plan_op = match kont.plan_action {
-            fold::PlanAction::Idle(plan_op) =>
-                plan_op,
-            fold::PlanAction::Step(plan::Continue { next: plan_script, }) =>
-                plan_script.step(fold_ctx.plan_ctx()),
-        };
-        kont = match kont.next.step(&mut fold_ctx, plan_op).unwrap() {
+        kont = match kont.step_rec(&mut fold_ctx).unwrap() {
             fold::Instruction::Op(fold::Op::VisitLevel(fold::VisitLevel { next, .. })) =>
                 next.level_ready(0, &mut fold_ctx).unwrap(),
             fold::Instruction::Op(fold::Op::VisitBlockStart(fold::VisitBlockStart { level_seed, next, .. })) =>

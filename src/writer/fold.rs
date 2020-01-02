@@ -397,3 +397,17 @@ impl<S> Context<S> {
         )
     }
 }
+
+
+impl Continue {
+    pub fn step_rec<S>(self, fold_context: &mut Context<S>) -> Result<Instruction<S>, Error> {
+        match self {
+            Continue { plan_action: PlanAction::Idle(plan_op), next: fold_next, } =>
+                fold_next.step(fold_context, plan_op),
+            Continue { plan_action: PlanAction::Step(plan::Continue { next: plan_next, }), next: fold_next, } => {
+                let plan_op = plan_next.step(fold_context.plan_ctx());
+                fold_next.step(fold_context, plan_op)
+            },
+        }
+    }
+}

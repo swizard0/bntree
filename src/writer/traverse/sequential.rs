@@ -34,6 +34,8 @@ pub enum Error {
     InvalidContextWriteStateForUnderlyingAction,
     InvalidContextModeForWriteTreeHeader,
     InvalidContextModeForFinishTreeHeader,
+    StepRecMarkup(two_pass::markup::Error),
+    StepRecWrite(two_pass::write::Error<Offset>),
 }
 
 pub enum Pass<M, W> {
@@ -383,5 +385,31 @@ impl io::Write for BlockWriter {
     #[inline]
     fn flush(&mut self) -> io::Result<()> {
         self.cursor.flush()
+    }
+}
+
+
+impl Continue {
+    pub fn step_rec<'ctx>(self, sequential_context: &'ctx mut Context) -> Result<Instruction<'ctx>, Error> {
+        let underlying_op = match self.underlying_action {
+            UnderlyingAction::Idle(underlying_op) =>
+                underlying_op,
+            UnderlyingAction::Step(underlying_step) =>
+                match underlying_step.action(sequential_context)? {
+                    Pass::Markup(ActionMarkup { context: markup_ctx, next: markup_continue, }) => {
+                        markup_continue
+                            .step_rec(markup_ctx)
+                            .map_err(Error::StepRecMarkup)?
+                            .into()
+                    },
+                    Pass::Write(ActionWrite { context: write_ctx, next: write_continue, }) => {
+                        write_continue
+                            .step_rec(write_ctx)
+                            .map_err(Error::StepRecWrite)?
+                            .into()
+                    },
+                },
+        };
+        self.next.step(sequential_context, underlying_op)
     }
 }

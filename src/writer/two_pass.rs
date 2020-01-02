@@ -40,6 +40,7 @@ pub mod markup {
         FinishBlock(fold::Error),
         NoActiveBlockWhileWriteItem,
         NoActiveBlockWhileBlockFinish,
+        StepRec(fold::Error),
     }
 
     pub struct Context<B, O> {
@@ -291,6 +292,22 @@ pub mod markup {
                 })
         }
     }
+
+
+    impl<B, O> Continue<B, O> {
+        pub fn step_rec(self, markup_context: &mut Context<B, O>) -> Result<Instruction<B, O>, Error> {
+            match self {
+                Continue { fold_action: FoldAction::Idle(fold_op), next: markup_next, } =>
+                    markup_next.step(markup_context, fold_op),
+                Continue { fold_action: FoldAction::Step(fold_continue), next: markup_next, } => {
+                    let fold_op = fold_continue
+                        .step_rec(markup_context.fold_ctx())
+                        .map_err(Error::StepRec)?;
+                    markup_next.step(markup_context, fold_op)
+                },
+            }
+        }
+    }
 }
 
 pub mod write {
@@ -341,6 +358,7 @@ pub mod write {
         WriteItem(fold::Error),
         NoActiveBlockWhileFlushBlock,
         FlushBlock(fold::Error),
+        StepRec(fold::Error),
     }
 
     pub struct Context<B, O> {
@@ -671,6 +689,24 @@ pub mod write {
                 fold_action: FoldAction::Step(fold_continue),
                 next: self.script,
             })
+        }
+    }
+
+
+    impl<B, O> Continue<B, O> {
+        pub fn step_rec(self, write_context: &mut Context<B, O>) -> Result<Instruction<B, O>, Error<O>>
+        where O: Clone + Add<Output = O>,
+        {
+            match self {
+                Continue { fold_action: FoldAction::Idle(fold_op), next: write_next, } =>
+                    write_next.step(write_context, fold_op),
+                Continue { fold_action: FoldAction::Step(fold_continue), next: write_next, } => {
+                    let fold_op = fold_continue
+                        .step_rec(write_context.fold_ctx())
+                        .map_err(Error::StepRec)?;
+                    write_next.step(write_context, fold_op)
+                },
+            }
         }
     }
 }

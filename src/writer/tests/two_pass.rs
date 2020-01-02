@@ -214,17 +214,7 @@ mod markup {
 
         let mut kont = two_pass::markup::Script::boot();
         loop {
-            let fold_op = match kont.fold_action {
-                two_pass::markup::FoldAction::Idle(fold_op) =>
-                    fold_op,
-                two_pass::markup::FoldAction::Step(fold::Continue { plan_action: fold::PlanAction::Idle(plan_op), next, }) =>
-                    next.step(&mut markup_ctx.fold_ctx(), plan_op).unwrap(),
-                two_pass::markup::FoldAction::Step(fold::Continue { plan_action: fold::PlanAction::Step(plan_kont), next, }) => {
-                    let plan_op = plan_kont.next.step(markup_ctx.fold_ctx().plan_ctx());
-                    next.step(&mut markup_ctx.fold_ctx(), plan_op).unwrap()
-                },
-            };
-            kont = match kont.next.step(&mut markup_ctx, fold_op).unwrap() {
+            kont = match kont.step_rec(&mut markup_ctx).unwrap() {
                 two_pass::markup::Instruction::Op(two_pass::markup::Op::LevelHeaderSize(
                     two_pass::markup::LevelHeaderSize { level_index, next, },
                 )) => {
@@ -292,17 +282,7 @@ mod write {
 
         let mut kont = two_pass::write::Script::boot();
         loop {
-            let fold_op = match kont.fold_action {
-                two_pass::write::FoldAction::Idle(fold_op) =>
-                    fold_op,
-                two_pass::write::FoldAction::Step(fold::Continue { plan_action: fold::PlanAction::Idle(plan_op), next, }) =>
-                    next.step(write_ctx.fold_ctx(), plan_op).unwrap(),
-                two_pass::write::FoldAction::Step(fold::Continue { plan_action: fold::PlanAction::Step(plan_kont), next, }) => {
-                    let plan_op = plan_kont.next.step(write_ctx.fold_ctx().plan_ctx());
-                    next.step(write_ctx.fold_ctx(), plan_op).unwrap()
-                },
-            };
-            kont = match kont.next.step(&mut write_ctx, fold_op).unwrap() {
+            kont = match kont.step_rec(&mut write_ctx).unwrap() {
                 two_pass::write::Instruction::Op(two_pass::write::Op::WriteTreeHeader(
                     two_pass::write::WriteTreeHeader { tree_offset, tree_header_size, tree_total_size, next, },
                 )) => {
