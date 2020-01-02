@@ -6,6 +6,7 @@ use super::super::{
 
 pub enum Instruction<'ctx> {
     Op(Op<'ctx>),
+    Noop(Continue),
     Done,
 }
 
@@ -34,6 +35,7 @@ pub enum Error {
     InvalidContextWriteStateForUnderlyingAction,
     InvalidContextModeForWriteTreeHeader,
     InvalidContextModeForFinishTreeHeader,
+    Markup(two_pass::markup::Error),
     StepRecMarkup(two_pass::markup::Error),
     StepRecWrite(two_pass::write::Error<Offset>),
 }
@@ -103,7 +105,7 @@ impl Script {
             Mode::TreeHeaderFinish(Pass::Write(ModeWriteHeaderFinish)) =>
                 unimplemented!(),
 
-            Mode::Step(Pass::Markup(ModeMarkup { context, tree_header_size, })) =>
+            Mode::Step(Pass::Markup(ModeMarkup { context: markup_context, tree_header_size, })) =>
                 match op {
                     UnderlyingOp(None) | UnderlyingOp(Some(Pass::Write(..))) =>
                         Err(Error::InvalidContextModeForUnderlyingAction),
@@ -111,8 +113,16 @@ impl Script {
                         two_pass::markup::Instruction::Op(two_pass::markup::Op::LevelHeaderSize(
                             two_pass::markup::LevelHeaderSize { next, .. },
                         )),
-                    ))) =>
-                        unimplemented!(),
+                    ))) => {
+                        let markup_next = next.level_header_size(0, markup_context)
+                            .map_err(Error::Markup)?;
+                        Ok(Instruction::Noop(Continue {
+                            underlying_action: UnderlyingAction::Step(
+                                UnderlyingActionStep(Pass::Markup(markup_next)),
+                            ),
+                            next: self,
+                        }))
+                    },
                     UnderlyingOp(Some(Pass::Markup(
                         two_pass::markup::Instruction::Op(two_pass::markup::Op::AllocBlock(
                             two_pass::markup::AllocBlock { next, .. },

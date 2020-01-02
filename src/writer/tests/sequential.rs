@@ -16,6 +16,8 @@ fn tree17_4_markup() {
     let mut kont = sequential::Script::boot();
     loop {
         kont = match kont.step_rec(&mut context).unwrap() {
+            sequential::Instruction::Noop(kont) =>
+                kont,
             sequential::Instruction::Op(sequential::Op::MarkupStart(markup_start)) =>
                 markup_start.created_context(
                     two_pass::markup::Context::new(
