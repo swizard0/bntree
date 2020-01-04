@@ -13,7 +13,7 @@ pub struct Perform {
 }
 
 pub enum Op {
-    BlockStart,
+    BlockStart { items_count: usize, },
     BlockItem { index: usize, },
     BlockFinish,
 }
@@ -34,6 +34,7 @@ pub struct Context {
 struct LevelCursor {
     level_index: usize,
     block_index: usize,
+    blocks_count: usize,
     block_cursor: BlockCursor,
     items_remain: usize,
 }
@@ -53,6 +54,7 @@ impl Context {
                 .map(|level| LevelCursor {
                     level_index: level.index,
                     block_index: 0,
+                    blocks_count: level.blocks_count,
                     block_cursor: BlockCursor::Start,
                     items_remain: level.items_count,
                 })
@@ -86,7 +88,13 @@ impl Script {
                 BlockCursor::Start => {
                     cursor.block_cursor = BlockCursor::Write { index: 0, };
                     return Instruction::Perform(Perform {
-                        op: Op::BlockStart,
+                        op: Op::BlockStart {
+                            items_count: if cursor.items_remain < context.block_size {
+                                cursor.items_remain
+                            } else {
+                                context.block_size
+                            },
+                        },
                         level_index: cursor.level_index,
                         block_index: cursor.block_index,
                         next: Continue { next: self, },

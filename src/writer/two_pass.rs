@@ -83,10 +83,11 @@ pub mod markup {
                             fold_next: next,
                         },
                     }))),
-                fold::Instruction::Op(fold::Op::VisitBlockStart(fold::VisitBlockStart { level_index, level_seed, block_index, next, })) =>
+                fold::Instruction::Op(fold::Op::VisitBlockStart(fold::VisitBlockStart { level_index, level_seed, block_index, items_count, next, })) =>
                     Ok(Instruction::Op(Op::AllocBlock(AllocBlock {
                         level_index,
                         block_index,
+                        items_count,
                         next: AllocBlockNext {
                             level_seed,
                             script: self,
@@ -177,6 +178,7 @@ pub mod markup {
     pub struct AllocBlock<B, O> {
         pub level_index: usize,
         pub block_index: usize,
+        pub items_count: usize,
         pub next: AllocBlockNext<B, O>,
     }
 
@@ -469,11 +471,12 @@ pub mod write {
                         },
                     })))
                 },
-                fold::Instruction::Op(fold::Op::VisitBlockStart(fold::VisitBlockStart { level_index, level_seed, block_index, next, })) =>
+                fold::Instruction::Op(fold::Op::VisitBlockStart(fold::VisitBlockStart { level_index, level_seed, block_index, items_count, next, })) =>
                     Ok(Instruction::Op(Op::WriteBlockHeader(WriteBlockHeader {
                         level_index,
                         block_index,
                         block_offset: level_seed.block_offset.clone(),
+                        items_count,
                         next: WriteBlockHeaderNext {
                             level_seed,
                             script: self,
@@ -601,6 +604,7 @@ pub mod write {
         pub level_index: usize,
         pub block_index: usize,
         pub block_offset: O,
+        pub items_count: usize,
         pub next: WriteBlockHeaderNext<B, O>,
     }
 

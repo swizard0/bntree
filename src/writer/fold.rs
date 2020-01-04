@@ -128,7 +128,7 @@ impl Script {
 
     pub fn step<S>(self, context: &mut Context<S>, op: plan::Instruction) -> Result<Instruction<S>, Error> {
         match op {
-            plan::Instruction::Perform(plan::Perform { op: plan::Op::BlockStart, level_index, block_index, next, })  =>
+            plan::Instruction::Perform(plan::Perform { op: plan::Op::BlockStart { items_count, }, level_index, block_index, next, }) =>
                 match context.levels.get_mut(level_index).map(Option::take) {
                     None =>
                         Err(Error::InvalidPlanBlockStartLevelIndex { level_index, }),
@@ -141,7 +141,7 @@ impl Script {
                                 level_index,
                                 script: self,
                                 plan_next: plan::Instruction::Perform(plan::Perform {
-                                    op: plan::Op::BlockStart,
+                                    op: plan::Op::BlockStart { items_count, },
                                     level_index: level_index,
                                     block_index: block_index,
                                     next,
@@ -155,6 +155,7 @@ impl Script {
                             level_index,
                             level_seed,
                             block_index: 0,
+                            items_count,
                             next: VisitBlockStartNext {
                                 level_index,
                                 block_index,
@@ -175,6 +176,7 @@ impl Script {
                             level_index,
                             level_seed,
                             block_index,
+                            items_count,
                             next: VisitBlockStartNext {
                                 level_index,
                                 block_index,
@@ -288,6 +290,7 @@ pub struct VisitBlockStart<S> {
     pub level_index: usize,
     pub level_seed: S,
     pub block_index: usize,
+    pub items_count: usize,
     pub next: VisitBlockStartNext,
 }
 
