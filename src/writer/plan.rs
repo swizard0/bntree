@@ -34,7 +34,6 @@ pub struct Context {
 struct LevelCursor {
     level_index: usize,
     block_index: usize,
-    blocks_count: usize,
     block_cursor: BlockCursor,
     items_remain: usize,
 }
@@ -54,7 +53,6 @@ impl Context {
                 .map(|level| LevelCursor {
                     level_index: level.index,
                     block_index: 0,
-                    blocks_count: level.blocks_count,
                     block_cursor: BlockCursor::Start,
                     items_remain: level.items_count,
                 })

@@ -24,7 +24,7 @@ fn tree17_4_markup() {
                         fold::Context::new(plan::Context::new(&sketch), &sketch),
                     ),
                     &mut context,
-                ),
+                ).unwrap(),
             sequential::Instruction::Op(sequential::Op::WriteTreeHeader(write_tree_header)) => {
                 write_tree_header
                     .block_writer
@@ -34,6 +34,15 @@ fn tree17_4_markup() {
             },
             sequential::Instruction::Op(sequential::Op::FinishTreeHeader(finish_tree_header)) =>
                 finish_tree_header.next.tree_header_finished(&mut context).unwrap(),
+            sequential::Instruction::Op(sequential::Op::WriteBlockHeader(write_block_header)) => {
+                write_block_header
+                    .block_writer
+                    .write_fmt(format_args!("block header {} items", write_block_header.items_count))
+                    .unwrap();
+                write_block_header.next.block_header_written(&mut context).unwrap()
+            },
+            sequential::Instruction::Op(sequential::Op::FinishBlockHeader(finish_block_header)) =>
+                finish_block_header.next.block_header_finished(&mut context).unwrap(),
             sequential::Instruction::Done =>
                 break,
         }

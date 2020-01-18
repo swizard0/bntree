@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 pub mod sketch;
 // pub mod reader;
 pub mod writer;
