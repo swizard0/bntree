@@ -245,7 +245,9 @@ impl Script {
                 ..
             }))) =>
                 Ok(Instruction::Op(Op::WriteBlockHeader(WriteBlockHeader {
-                    items_count: *items_count,
+                    meta: Pass::Markup(WriteBlockHeaderMetaMarkup {
+                        items_count: *items_count,
+                    }),
                     block_writer: active_block_writer,
                     next: WriteBlockHeaderNext {
                         script: self,
@@ -491,10 +493,16 @@ impl FinishTreeHeaderNext {
 
 
 pub struct WriteBlockHeader<'ctx> {
-    pub items_count: usize,
+    pub meta: Pass<WriteBlockHeaderMetaMarkup, WriteBlockHeaderMetaWrite>,
     pub block_writer: &'ctx mut BlockWriter,
     pub next: WriteBlockHeaderNext,
 }
+
+pub struct WriteBlockHeaderMetaMarkup {
+    pub items_count: usize,
+}
+
+pub struct WriteBlockHeaderMetaWrite;
 
 pub struct WriteBlockHeaderNext {
     script: Script,
