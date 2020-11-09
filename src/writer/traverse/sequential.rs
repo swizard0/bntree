@@ -14,6 +14,8 @@ pub enum Op<'ctx> {
     FinishTreeHeader(FinishTreeHeader<'ctx>),
     WriteBlockHeader(WriteBlockHeader<'ctx>),
     FinishBlockHeader(FinishBlockHeader<'ctx>),
+    WriteBlockItem(WriteBlockItem<'ctx>),
+
 }
 
 pub struct Continue {
