@@ -1,4 +1,4 @@
-use super::super::sketch;
+use crate::sketch;
 
 pub enum Instruction {
     Perform(Perform),

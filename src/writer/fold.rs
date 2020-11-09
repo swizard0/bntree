@@ -1,6 +1,8 @@
-use super::{
-    plan,
-    super::sketch,
+use crate::{
+    writer::{
+        plan,
+    },
+    sketch,
 };
 
 pub enum Instruction<S> {

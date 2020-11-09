@@ -1,5 +1,5 @@
 mod sketch {
-    use super::super::sketch;
+    use crate::sketch;
 
     #[test]
     fn tree17_4() {

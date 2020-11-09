@@ -1,18 +1,12 @@
-use serde_derive::{
-    Serialize,
-    Deserialize,
-};
-
 use std::cmp::min;
 
-#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Level {
     pub index: usize,
     pub blocks_count: usize,
     pub items_count: usize,
 }
 
-#[derive(Serialize, Deserialize)]
 pub struct Tree {
     levels: Vec<Level>,
     block_size: usize,
