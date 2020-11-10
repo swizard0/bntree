@@ -112,9 +112,9 @@ fn tree22_3() {
         Instruction::BlockFinish { level_index: 1, block_index: 0 },
         Instruction::BlockStart { level_index: 0, block_index: 0, items_count: 3, },
         Instruction::WriteItem { level_index: 0, block_index: 0, item_index: 0 }, // 12
-        Instruction::BlockStart { level_index: 2, block_index: 0, items_count: 1, },
-        Instruction::WriteItem { level_index: 2, block_index: 0, item_index: 0 }, // 13
-        Instruction::BlockFinish { level_index: 2, block_index: 0 },
+        Instruction::BlockStart { level_index: 2, block_index: 3, items_count: 1, },
+        Instruction::WriteItem { level_index: 2, block_index: 3, item_index: 0 }, // 13
+        Instruction::BlockFinish { level_index: 2, block_index: 3 },
         Instruction::BlockStart { level_index: 1, block_index: 1, items_count: 3, },
         Instruction::WriteItem { level_index: 1, block_index: 1, item_index: 0 }, // 14
         Instruction::WriteItem { level_index: 1, block_index: 1, item_index: 1 }, // 15
