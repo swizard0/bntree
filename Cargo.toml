@@ -1,9 +1,9 @@
 [package]
 name = "bntree"
-version = "0.2.16"
+version = "0.2.17"
 authors = ["Alexey Voznyuk <me@swizard.info>"]
 description = "Immutable B*-tree like data structure with layout heavily optimized for sequential access"
 repository = "https://github.com/swizard0/bntree"
-edition = "2018"
+edition = "2021"
 
 [dependencies]
